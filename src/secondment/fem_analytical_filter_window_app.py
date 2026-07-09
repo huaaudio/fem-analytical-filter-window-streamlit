@@ -97,10 +97,22 @@ REFERENCE_ITEMS = (
         "url": "https://doi.org/10.1016/j.ymssp.2015.08.029",
     },
     {
+        "label": "Van Belle, L., Di Giusto, F., & Deckers, E. (2026). "
+        "Model-based auralization of vibro-acoustic metamaterial partitions. "
+        "In Proceedings of Forum Acusticum - Euronoise 2025 (pp. 5399-5406).",
+        "url": "https://doi.org/10.61782/fa.2025.0574",
+    },
+    {
         "label": "Van Belle, L., Claeys, C., Deckers, E., & Desmet, W. (2019). "
         "The impact of damping on the sound transmission loss of locally resonant metamaterial plates. "
         "Journal of Sound and Vibration, 461, 114909.",
         "url": "https://doi.org/10.1016/j.jsv.2019.114909",
+    },
+    {
+        "label": "Zhang, J., Cuenca, J., De Ryck, L., Van Belle, L., & Deckers, E. (2026). "
+        "Psychoacoustical design optimization for acoustic metamaterials using global sensitivity analysis. "
+        "In Proceedings of Forum Acusticum (pp. 2369-2373).",
+        "url": "https://doi.org/10.61782/fa.2025.0715",
     },
     {
         "label": "Fredianelli, L., Artuso, F., Pompei, G., Licitra, G., Iannace, G., & Akbaba, A. (2025). "
