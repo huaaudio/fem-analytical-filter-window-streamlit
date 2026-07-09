@@ -801,7 +801,10 @@ def build_audio_spectrogram(
     frames = np.stack([signal[start : start + frame_size] * window for start in starts], axis=0)
     spectrum = np.fft.rfft(frames, axis=1)
     freqs = np.fft.rfftfreq(frame_size, d=1.0 / float(sample_rate))
-    keep = (freqs > 0.0) & (freqs <= min(float(max_frequency_hz), float(sample_rate) / 2.0))
+    frequency_ceiling = min(float(max_frequency_hz), float(sample_rate) / 2.0)
+    keep = (freqs > 0.0) & (freqs <= frequency_ceiling)
+    if not np.any(keep):
+        return times, np.array([max(1.0, frequency_ceiling)]), np.array([[-80.0] * times.size])
     freqs = freqs[keep]
     magnitude = np.abs(spectrum[:, keep]).T
     magnitude_db = 20.0 * np.log10(np.maximum(magnitude, 1e-9))
@@ -892,7 +895,10 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
     fig.update_yaxes(
         title_text="Frequency [Hz]",
         type="log",
-        range=[float(np.log10(max(1.0, float(freqs[0])))), float(np.log10(max_spectrogram_hz))],
+        range=[
+            float(np.log10(max(1.0, float(spectrogram_f[0])))),
+            float(np.log10(max(1.0, max_spectrogram_hz))),
+        ],
         showgrid=False,
         zeroline=False,
         row=2,
