@@ -17,6 +17,7 @@ VALID_NUMERICAL_STORE_MODES = {
     NUMERICAL_STORE_MODE_PRECOMPUTED_ONLY,
 }
 DEFAULT_NUMERICAL_STORE_RELATIVE_PATH = Path(".cache") / "numerical_responses.sqlite3"
+DEPLOYMENT_NUMERICAL_STORE_RELATIVE_PATH = Path("data") / "numerical_responses.sqlite3"
 
 
 def _to_json_safe(value: Any):
@@ -53,7 +54,11 @@ def get_numerical_store_path(project_root: str | Path) -> Path:
     override = os.getenv("SECONDMENT_NUMERICAL_STORE_DB")
     if override:
         return Path(override)
-    return Path(project_root) / DEFAULT_NUMERICAL_STORE_RELATIVE_PATH
+    root = Path(project_root)
+    deployment_store = root / DEPLOYMENT_NUMERICAL_STORE_RELATIVE_PATH
+    if deployment_store.exists():
+        return deployment_store
+    return root / DEFAULT_NUMERICAL_STORE_RELATIVE_PATH
 
 
 def build_numerical_response_record(job_signature: str, numerical_inputs: dict[str, Any], normalized_result: dict[str, Any]):

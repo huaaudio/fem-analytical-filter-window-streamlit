@@ -89,6 +89,25 @@ BRAND_LOGOS = (
     {"label": "Siemens", "relative_path": "archive/siemens.png", "width": 210},
     {"label": "MSCA METAVISION", "relative_path": "archive/metavision.png", "width": 220},
 )
+REFERENCE_ITEMS = (
+    {
+        "label": "Claeys, C., Deckers, E., Pluymers, B., & Desmet, W. (2016). "
+        "A lightweight vibro-acoustic metamaterial demonstrator: Numerical and experimental investigation. "
+        "Mechanical Systems and Signal Processing, 70-71, 853-880.",
+        "url": "https://doi.org/10.1016/j.ymssp.2015.08.029",
+    },
+    {
+        "label": "Van Belle, L., Claeys, C., Deckers, E., & Desmet, W. (2019). "
+        "The impact of damping on the sound transmission loss of locally resonant metamaterial plates. "
+        "Journal of Sound and Vibration, 461, 114909.",
+        "url": "https://doi.org/10.1016/j.jsv.2019.114909",
+    },
+    {
+        "label": "Fredianelli, L., Artuso, F., Pompei, G., Licitra, G., Iannace, G., & Akbaba, A. (2025). "
+        "DataSEC - Dataset for Sound Event Classification of environmental noise. Zenodo.",
+        "url": "https://doi.org/10.5281/zenodo.17033970",
+    },
+)
 
 # openCFS FEM LRM (local-resonant metamaterial) STL exports, diffuse incidence.
 FEM_RESULTS_DIR = PROJECT_ROOT / "fem" / "results"
@@ -96,6 +115,9 @@ _FEM_LRM_FILENAME_RE = re.compile(r"^(A\d)_wall_lrm\.csv$", re.IGNORECASE)
 FEM_CACHE_CURVE_KEY = "Cache"
 UPLOAD_AUDIO_LABEL = "Upload WAV"
 RECORDED_AUDIO_CANDIDATES = (
+    ("DATASEC hairdryer 0004", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
+    ("DATASEC motorbike idling 0001", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
+    ("DATASEC vacuum cleaner 0001", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
     ("Heat pump measurement 10", "archive/Recordings/10_Measurement_10s.wav"),
     ("Heat pump measurement 12", "archive/Recordings/12_Measurement_10s.wav"),
     ("Heat pump max capacity 25", "archive/Recordings/25_MaxCapacity_10s.wav"),
@@ -260,6 +282,17 @@ def load_matching_fem_cache_curve(
             m_ratio=mass_ratio,
             eta_res=resonator_loss_factor,
             base_dat_hash=fem_lookup["base_hash"],
+        )
+        if fallback is not None:
+            fallback_signature, _record = fallback
+            result = load_numerical_result(store, fallback_signature)
+    if result is None:
+        fallback = find_matching_fem_entry(
+            store,
+            f_res_hz=resonance_hz,
+            m_ratio=mass_ratio,
+            eta_res=resonator_loss_factor,
+            base_dat_hash=None,
         )
         if fallback is not None:
             fallback_signature, _record = fallback
@@ -1197,6 +1230,13 @@ def render_project_info_section() -> None:
             **Acknowledgements**
             {ABOUT_ACKNOWLEDGEMENTS}
             """
+        )
+    with st.expander("References", expanded=False):
+        st.markdown(
+            "\n".join(
+                f"- [{item['label']}]({item['url']})"
+                for item in REFERENCE_ITEMS
+            )
         )
 
 
