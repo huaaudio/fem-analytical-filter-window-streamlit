@@ -1,0 +1,17 @@
+{
+  "solver_id": "fem_sol108_diffuse",
+  "base_dat": "fem/materials/lrm_uc_a4.sim1-lrm_tl.dat",
+  "grid": {
+    "m_ratio": [0.2],
+    "f_res_hz": {"start": 300, "stop": 1200, "step": 100},
+    "eta_res": [0.05]
+  },
+  "nastran": {
+    "executable": "nastran",
+    "arguments": [],
+    "parallel": 0,
+    "dmparallel": 0,
+    "max_concurrency": 1
+  },
+  "work_dir": ".cache/fem_prerun"
+}
