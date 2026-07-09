@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
 import streamlit as st
+from plotly.subplots import make_subplots
 from scipy.io import wavfile
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,26 @@ FIXED_POISSON_RATIO = 0.30
 FIXED_HOST_LOSS_FACTOR = 0.02
 FIXED_PARTITION_TYPE = "single"
 DEFAULT_RESONANCE_HZ = 300.0
+DEFAULT_F_MIN_HZ = 20.0
+DEFAULT_F_MAX_HZ = 5000.0
+DEMO_WINDOW_NAME = "A4"
+DEMO_N_POINTS = 260
+DEMO_INCIDENCE = "diffuse"
+ABOUT_AUTHOR = "Jiahua Zhang, PhD Candidate at KU Leuven/Siemens."
+ABOUT_CONTACT = "jiahua.zhang@siemens.com"
+ABOUT_ACKNOWLEDGEMENTS = (
+    "The European Commission is gratefully acknowledged for their support of the "
+    "Horizon Europe DN METAVISION project (GA 101072415). Views and opinions expressed "
+    "are however those of the authors only and do not necessarily reflect those of the "
+    "European Union. The European Union cannot be held responsible for them. The research "
+    "of L. Van Belle (fellowship no. 1254325N) is funded by a grant from the Research "
+    "Foundation -- Flanders (FWO)."
+)
+BRAND_LOGOS = (
+    {"label": "KU Leuven", "relative_path": "archive/kuleuven.jpg", "width": 96},
+    {"label": "Siemens", "relative_path": "archive/siemens.png", "width": 210},
+    {"label": "MSCA METAVISION", "relative_path": "archive/metavision.png", "width": 220},
+)
 
 # openCFS FEM LRM (local-resonant metamaterial) STL exports, diffuse incidence.
 FEM_RESULTS_DIR = PROJECT_ROOT / "fem" / "results"
@@ -334,7 +355,7 @@ def discover_recorded_audio_files() -> dict[str, Path]:
 
 def fem_curve_display_label(key: str) -> str:
     if key == FEM_CACHE_CURVE_KEY:
-        return "FEM cache (SOL 108, diffuse)"
+        return "FEM reference"
     return f"FEM LRM {key} (CSV, diffuse)"
 
 
@@ -352,6 +373,57 @@ def build_frequency_axis(f_min_hz: float, f_max_hz: float, n_points: int) -> np.
     if n_points < 3:
         raise ValueError("Frequency points must be at least 3.")
     return np.geomspace(float(f_min_hz), float(f_max_hz), int(n_points))
+
+
+def get_resource_path(relative_name: str) -> Path:
+    """Resolve bundled project resources from source or packaged builds."""
+    candidate = PROJECT_ROOT / relative_name
+    if candidate.exists():
+        return candidate
+    return Path(__file__).resolve().parents[2] / relative_name
+
+
+def get_brand_logo_specs() -> list[dict[str, object]]:
+    return [
+        {
+            "label": logo["label"],
+            "path": get_resource_path(str(logo["relative_path"])),
+            "width": int(logo["width"]),
+        }
+        for logo in BRAND_LOGOS
+    ]
+
+
+def build_demo_values(resonance_hz: float) -> dict[str, object]:
+    return {
+        "selected_windows": (DEMO_WINDOW_NAME,),
+        "show_fem_cache": True,
+        "show_fem_lrm": False,
+        "resonance_hz": float(resonance_hz),
+        "mass_ratio": FIXED_MASS_RATIO,
+        "resonator_loss_factor": FIXED_RESONATOR_LOSS_FACTOR,
+        "unit_cell_a_m": FIXED_UNIT_CELL_A_M,
+        "unit_cell_b_m": FIXED_UNIT_CELL_B_M,
+        "material": None,
+        "density": FIXED_DENSITY,
+        "thickness_m": FIXED_THICKNESS_M,
+        "young_modulus": FIXED_YOUNG_MODULUS,
+        "poisson_ratio": FIXED_POISSON_RATIO,
+        "host_loss_factor": FIXED_HOST_LOSS_FACTOR,
+        "partition_type": FIXED_PARTITION_TYPE,
+        "cavity_thickness_m": 0.05,
+        "second_material": None,
+        "second_thickness_m": None,
+        "second_plate_type": None,
+        "f_min_hz": DEFAULT_F_MIN_HZ,
+        "f_max_hz": DEFAULT_F_MAX_HZ,
+        "n_points": DEMO_N_POINTS,
+        "incidence": DEMO_INCIDENCE,
+        "theta_oblique_deg": 0.0,
+        "theta_limit_deg": 90.0,
+        "theta_samples": 81,
+        "radial_samples": 140,
+    }
 
 
 @st.cache_data(show_spinner=False)
@@ -457,6 +529,8 @@ def build_plot(
     finite_results: dict[str, object],
     resonance_hz: float,
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+    f_min_hz: float | None = None,
+    f_max_hz: float | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     freq_arrays = [np.asarray(infinite.freqs_hz, dtype=np.float64)]
@@ -502,8 +576,12 @@ def build_plot(
 
     freq_values = np.concatenate([array[np.isfinite(array) & (array > 0.0)] for array in freq_arrays])
     stl_values = np.concatenate([array[np.isfinite(array)] for array in stl_arrays])
-    f_min = float(np.min(freq_values))
-    f_max = float(np.max(freq_values))
+    f_min = float(np.min(freq_values)) if f_min_hz is None else float(f_min_hz)
+    f_max = float(np.max(freq_values)) if f_max_hz is None else float(f_max_hz)
+    if f_min <= 0.0:
+        raise ValueError("Plot minimum frequency must be positive.")
+    if f_max <= f_min:
+        raise ValueError("Plot maximum frequency must be greater than minimum frequency.")
     y_min = float(np.min(stl_values))
     y_max = float(np.max(stl_values))
     y_pad = max(1.0, 0.05 * (y_max - y_min))
@@ -631,6 +709,167 @@ def normalize_audio_group(signals: dict[str, np.ndarray]) -> dict[str, np.ndarra
     }
 
 
+def audio_level_db(signal: np.ndarray) -> float:
+    rms = float(np.sqrt(np.mean(np.asarray(signal, dtype=np.float64) ** 2)))
+    return 20.0 * float(np.log10(max(rms, 1e-12)))
+
+
+def build_waveform_figure(signal: np.ndarray, sample_rate: int, color: str) -> go.Figure:
+    signal = np.asarray(signal, dtype=np.float64)
+    if signal.size == 0:
+        x = np.array([0.0])
+        y = np.array([0.0])
+    else:
+        step = max(1, int(np.ceil(signal.size / 900)))
+        y = signal[::step]
+        x = np.arange(y.size, dtype=np.float64) * step / float(sample_rate)
+    fig = go.Figure(
+        go.Scatter(
+            x=x,
+            y=y,
+            mode="lines",
+            line={"color": color, "width": 1.4},
+            hoverinfo="skip",
+        )
+    )
+    fig.update_layout(
+        height=112,
+        margin={"l": 4, "r": 4, "t": 2, "b": 2},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis={"visible": False},
+        yaxis={"visible": False, "range": [-1.02, 1.02]},
+    )
+    return fig
+
+
+def build_audio_spectrogram(
+    signal: np.ndarray,
+    sample_rate: int,
+    *,
+    max_frequency_hz: float = DEFAULT_F_MAX_HZ,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    signal = np.asarray(signal, dtype=np.float64)
+    if signal.size < 2:
+        return np.array([0.0]), np.array([0.0]), np.array([[-120.0]])
+
+    frame_size = min(2048, max(256, int(2 ** np.floor(np.log2(signal.size)))))
+    hop_size = max(1, frame_size // 4)
+    if signal.size < frame_size:
+        signal = np.pad(signal, (0, frame_size - signal.size))
+    starts = np.arange(0, signal.size - frame_size + 1, hop_size, dtype=int)
+    if starts.size == 0:
+        starts = np.array([0], dtype=int)
+
+    window = np.hanning(frame_size)
+    frames = np.stack([signal[start : start + frame_size] * window for start in starts], axis=0)
+    spectrum = np.fft.rfft(frames, axis=1)
+    freqs = np.fft.rfftfreq(frame_size, d=1.0 / float(sample_rate))
+    keep = freqs <= min(float(max_frequency_hz), float(sample_rate) / 2.0)
+    freqs = freqs[keep]
+    magnitude = np.abs(spectrum[:, keep]).T
+    magnitude_db = 20.0 * np.log10(np.maximum(magnitude, 1e-9))
+    peak = float(np.nanmax(magnitude_db))
+    spectrogram_db = np.clip(magnitude_db - peak, -80.0, 0.0)
+    times = (starts.astype(np.float64) + 0.5 * frame_size) / float(sample_rate)
+    return times, freqs, spectrogram_db
+
+
+def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) -> go.Figure:
+    signal = np.asarray(signal, dtype=np.float64)
+    if signal.size == 0:
+        time_x = np.array([0.0])
+        time_y = np.array([0.0])
+    else:
+        step = max(1, int(np.ceil(signal.size / 900)))
+        time_y = signal[::step]
+        time_x = np.arange(time_y.size, dtype=np.float64) * step / float(sample_rate)
+    spectrogram_t, spectrogram_f, spectrogram_db = build_audio_spectrogram(signal, sample_rate)
+    max_spectrogram_hz = min(DEFAULT_F_MAX_HZ, float(sample_rate) / 2.0)
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        row_heights=[0.45, 0.55],
+        vertical_spacing=0.12,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=time_x,
+            y=time_y,
+            mode="lines",
+            line={"color": "#7dd3fc", "width": 1.1},
+            hovertemplate="t=%{x:.2f}s<br>amp=%{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            x=spectrogram_t,
+            y=spectrogram_f,
+            z=spectrogram_db,
+            zmin=-80.0,
+            zmax=0.0,
+            colorscale=[
+                [0.0, "#020617"],
+                [0.18, "#111827"],
+                [0.35, "#312e81"],
+                [0.52, "#7e22ce"],
+                [0.68, "#db2777"],
+                [0.84, "#f97316"],
+                [1.0, "#fff7ad"],
+            ],
+            showscale=False,
+            hovertemplate="t=%{x:.2f}s<br>f=%{y:.0f}Hz<br>%{z:.1f}dB<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.update_layout(
+        height=220,
+        margin={"l": 10, "r": 10, "t": 6, "b": 34},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#101828",
+        showlegend=False,
+        font={"color": "#cbd5e1", "size": 10},
+    )
+    fig.update_xaxes(
+        title_text="Time [s]",
+        showgrid=True,
+        gridcolor="rgba(148, 163, 184, 0.18)",
+        zeroline=False,
+        row=1,
+        col=1,
+    )
+    fig.update_yaxes(visible=False, range=[-1.02, 1.02], row=1, col=1)
+    fig.update_xaxes(
+        title_text="Time [s]",
+        title_standoff=4,
+        range=[float(time_x[0]), float(time_x[-1]) if time_x.size else 0.0],
+        showgrid=True,
+        gridcolor="rgba(148, 163, 184, 0.18)",
+        zeroline=False,
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(
+        title_text="Frequency [Hz]",
+        range=[0.0, max_spectrogram_hz],
+        showgrid=False,
+        zeroline=False,
+        row=2,
+        col=1,
+    )
+    return fig
+
+
+def build_audio_output_label(paper_name: str) -> str:
+    if paper_name == DEMO_WINDOW_NAME:
+        return "A4 size analytical"
+    return f"{paper_window_label(paper_name)} analytical"
+
+
 def fem_stl_to_transmission_amplitude(stl_db: np.ndarray) -> np.ndarray:
     """Convert a diffuse STL curve [dB] to a pressure transmission amplitude.
 
@@ -743,33 +982,78 @@ def build_filter_signature(
     )
 
 
-def render_sidebar(cache_points: list[dict[str, object]]):
-    with st.sidebar:
-        st.header("Window")
-        selected_windows = st.multiselect(
-            "Paper size",
-            options=list(DEFAULT_PAPER_WINDOW_NAMES),
-            default=list(DEFAULT_PAPER_WINDOW_NAMES),
-        )
-        if not selected_windows:
-            selected_windows = ["A4"]
-        show_fem_lrm = st.checkbox(
-            "Overlay legacy FEM CSV curves",
-            value=False,
-            help=(
-                "Overlay the old Simcenter3D/OpenCFS CSV exports for the selected "
-                "paper windows. These are independent of the cache point controls."
-            ),
-        )
+def render_demo_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.4rem;
+            padding-bottom: 2.5rem;
+            max-width: 1280px;
+        }
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        .demo-top-rule {
+            border-top: 1px solid #d9dde5;
+            margin: 1.0rem 0 1.2rem;
+        }
+        .demo-kicker {
+            color: #5f6878;
+            font-size: 0.86rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 0.2rem;
+        }
+        .demo-meta {
+            color: #4f5665;
+            font-size: 0.95rem;
+            line-height: 1.45;
+        }
+        .audio-card-title {
+            font-weight: 700;
+            color: #202635;
+            margin-bottom: 0.15rem;
+        }
+        .audio-card-caption {
+            color: #667085;
+            font-size: 0.88rem;
+            margin-bottom: 0.55rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        st.header("Resonator")
+
+def render_brand_header() -> None:
+    title_col, logos_col = st.columns([1.65, 1.35], gap="large")
+    with title_col:
+        st.title("Auralization Comparison: Local Resonant Metamaterial Analytical vs FEM Response")
+    with logos_col:
+        st.caption("Project Partners")
+        logo_columns = st.columns(len(BRAND_LOGOS), gap="medium")
+        for column, spec in zip(logo_columns, get_brand_logo_specs()):
+            with column:
+                path = Path(spec["path"])
+                if path.exists():
+                    st.image(str(path), width=int(spec["width"]))
+                else:
+                    st.caption(str(spec["label"]))
+    st.markdown('<div class="demo-top-rule"></div>', unsafe_allow_html=True)
+
+
+def render_demo_controls(cache_points: list[dict[str, object]]) -> dict[str, object]:
+    control_col, info_col = st.columns([1.0, 1.45], gap="large")
+    with control_col:
+        st.markdown('<div class="demo-kicker">Demonstration setting</div>', unsafe_allow_html=True)
         cached_frequencies = cached_resonance_frequencies(cache_points)
         if cached_frequencies:
             default_index = 0
             if DEFAULT_RESONANCE_HZ in cached_frequencies:
                 default_index = cached_frequencies.index(DEFAULT_RESONANCE_HZ)
             resonance_hz = st.select_slider(
-                "Cached resonance frequency [Hz]",
+                "Resonance frequency [Hz]",
                 options=cached_frequencies,
                 value=cached_frequencies[default_index],
                 format_func=lambda value: f"{float(value):.0f} Hz",
@@ -778,67 +1062,19 @@ def render_sidebar(cache_points: list[dict[str, object]]):
             resonance_hz = st.slider(
                 "Resonance frequency [Hz]", 100.0, 2000.0, DEFAULT_RESONANCE_HZ, 10.0
             )
-
-        st.caption(
-            "Fixed scan: mass ratio 20%, structural loss 0.05, "
-            "50 x 50 mm unit cell, single aluminum partition."
+    with info_col:
+        st.markdown(
+            (
+                '<div class="demo-meta">'
+                "<strong>A4 sized panel</strong><br>"
+                "Analytical infinite and finite-window local resonant metamaterial responses are compared "
+                "against the matching diffuse-field Finite Element Method (FEM) reference calculated with Siemens Simcenter3D. "
+                f"The display range is {DEFAULT_F_MIN_HZ:.0f} Hz to {DEFAULT_F_MAX_HZ / 1000.0:.1f} kHz."
+                "</div>"
+            ),
+            unsafe_allow_html=True,
         )
-
-        with st.expander("Frequency And Integration", expanded=False):
-            f_min_hz = st.number_input("Minimum frequency [Hz]", min_value=1.0, value=10.0, step=10.0)
-            f_max_hz = st.number_input("Maximum frequency [Hz]", min_value=20.0, value=4000.0, step=100.0)
-            n_points = st.slider("Frequency points", 80, 800, 260, 20)
-            incidence = st.radio(
-                "Incidence",
-                options=("diffuse", "oblique", "normal"),
-                horizontal=True,
-                help=(
-                    "'normal' is a single plane wave at 0 deg (a normal-incidence "
-                    "check); 'oblique' is a single plane wave at the angle below; "
-                    "'diffuse' averages over many plane waves up to the limit angle."
-                ),
-            )
-            theta_oblique_deg = st.slider(
-                "Oblique angle [deg]",
-                0.0,
-                80.0,
-                0.0,
-                1.0,
-                disabled=incidence != "oblique",
-            )
-            theta_limit_deg = st.slider("Diffuse limit angle [deg]", 10.0, 90.0, 90.0, 1.0)
-            theta_samples = st.slider("Angular samples", 21, 181, 81, 10)
-            radial_samples = st.slider("Radial samples", 20, 600, 140, 20)
-
-    return {
-        "selected_windows": tuple(selected_windows),
-        "show_fem_cache": True,
-        "show_fem_lrm": bool(show_fem_lrm),
-        "resonance_hz": float(resonance_hz),
-        "mass_ratio": FIXED_MASS_RATIO,
-        "resonator_loss_factor": FIXED_RESONATOR_LOSS_FACTOR,
-        "unit_cell_a_m": FIXED_UNIT_CELL_A_M,
-        "unit_cell_b_m": FIXED_UNIT_CELL_B_M,
-        "material": None,
-        "density": FIXED_DENSITY,
-        "thickness_m": FIXED_THICKNESS_M,
-        "young_modulus": FIXED_YOUNG_MODULUS,
-        "poisson_ratio": FIXED_POISSON_RATIO,
-        "host_loss_factor": FIXED_HOST_LOSS_FACTOR,
-        "partition_type": FIXED_PARTITION_TYPE,
-        "cavity_thickness_m": 0.05,
-        "second_material": None,
-        "second_thickness_m": None,
-        "second_plate_type": None,
-        "f_min_hz": f_min_hz,
-        "f_max_hz": f_max_hz,
-        "n_points": n_points,
-        "incidence": incidence,
-        "theta_oblique_deg": theta_oblique_deg,
-        "theta_limit_deg": theta_limit_deg,
-        "theta_samples": theta_samples,
-        "radial_samples": radial_samples,
-    }
+    return build_demo_values(float(resonance_hz))
 
 
 def render_auralization(
@@ -847,7 +1083,8 @@ def render_auralization(
     filter_signature: tuple,
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
-    st.subheader("Auralization")
+    st.divider()
+    st.header("Auralization comparison")
     fem_lrm_curves = fem_lrm_curves or {}
     stored_result = st.session_state.get("window_auralization")
     if stored_result is not None and stored_result.get("filter_signature") != filter_signature:
@@ -855,27 +1092,20 @@ def render_auralization(
 
     recorded_audio = discover_recorded_audio_files()
     audio_options = [UPLOAD_AUDIO_LABEL, *recorded_audio]
-    source_type = st.selectbox(
-        "Audio source",
-        options=audio_options,
-    )
-    include_fem = False
-    if fem_lrm_curves:
-        include_fem = st.checkbox(
-            "Include FEM curves in auralization",
-            value=True,
-            help=(
-                "Auralize the finite-element curves by converting their "
-                "diffuse STL [dB] to a transmission amplitude (10^(-STL/20)) and "
-                "running it through the same minimum-phase filter pipeline."
-            ),
-        )
-    duration_seconds = st.slider("Audio duration [s]", 5.0, 10.0, 8.0, 0.5)
+    source_col, duration_col, action_col = st.columns([1.45, 1.0, 0.85], gap="large")
+    with source_col:
+        source_type = st.selectbox("Audio source", options=audio_options)
+    with duration_col:
+        duration_seconds = st.slider("Duration [s]", 5.0, 10.0, 8.0, 0.5)
     uploaded_file = None
     if source_type == UPLOAD_AUDIO_LABEL:
         uploaded_file = st.file_uploader("WAV file", type=["wav"])
 
-    if st.button("Run Auralization", type="primary"):
+    with action_col:
+        st.write("")
+        run_auralization = st.button("Run comparison", type="primary", width="stretch")
+
+    if run_auralization:
         if source_type == UPLOAD_AUDIO_LABEL:
             if uploaded_file is None:
                 st.warning("Upload a WAV file first.")
@@ -887,13 +1117,12 @@ def render_auralization(
             audio_signal = trim_audio(audio_signal, sample_rate, duration_seconds)
 
         with st.spinner("Building windowed audio..."):
-            fem_curves_for_audio = fem_lrm_curves if include_fem else {}
             infinite_audio, finite_audio, fem_audio = auralize_window_filters(
                 audio_signal,
                 sample_rate,
                 infinite,
                 finite_results,
-                fem_curves_for_audio,
+                fem_lrm_curves,
             )
             playback_signals = {
                 "Original": infinite_audio.input_signal,
@@ -901,7 +1130,7 @@ def render_auralization(
             }
             playback_signals.update(
                 {
-                    paper_window_label(paper_name): result.output_signal
+                    build_audio_output_label(paper_name): result.output_signal
                     for paper_name, result in finite_audio.items()
                 }
             )
@@ -924,115 +1153,70 @@ def render_auralization(
 
     debug = result_state["debug"]
     st.caption(
-        "Internal sample rate: "
-        f"{debug.processing_rate} Hz "
-        f"({debug.selection_mode}, input {debug.input_rate} Hz, max FRF {debug.max_frequency:.1f} Hz)."
+        f"Processed at {debug.processing_rate} Hz "
+        f"({debug.selection_mode}; input {debug.input_rate} Hz; response to {debug.max_frequency:.1f} Hz)."
     )
-    for label, signal in result_state["signals"].items():
-        st.caption(label)
-        st.audio(signal, sample_rate=result_state["sample_rate"], format="audio/wav")
+    signals = result_state["signals"]
+    sample_rate = int(result_state["sample_rate"])
+    original_level = audio_level_db(next(iter(signals.values())))
+    colors = ["#475467", "#1f77b4", "#8c564b", "#111827", "#2ca02c", "#9467bd"]
+    columns = st.columns(2, gap="large")
+    for index, (label, signal) in enumerate(signals.items()):
+        with columns[index % 2]:
+            with st.container(border=True):
+                level = audio_level_db(signal)
+                delta = level - original_level
+                st.markdown(f'<div class="audio-card-title">{label}</div>', unsafe_allow_html=True)
+                st.markdown(
+                    (
+                        '<div class="audio-card-caption">'
+                        f"RMS level {level:.1f} dBFS, {delta:+.1f} dB vs original"
+                        "</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+                st.plotly_chart(
+                    build_audio_card_figure(signal, sample_rate, colors[index % len(colors)]),
+                    width="stretch",
+                    config={"displayModeBar": False},
+                )
+                st.audio(signal, sample_rate=sample_rate, format="audio/wav")
 
 
-def _format_cache_point(point: dict[str, object]) -> str:
-    return (
-        f"f_res={float(point['f_res_hz']):.1f} Hz, "
-        f"m_ratio={100.0 * float(point['m_ratio']):.1f}%, "
-        f"eta={float(point['eta_res']):.3f}"
-    )
+def render_project_info_section() -> None:
+    st.divider()
+    with st.expander("Project information", expanded=False):
+        st.markdown(
+            f"""
+            **Author**
+            {ABOUT_AUTHOR}
 
+            **Contact**
+            {ABOUT_CONTACT}
 
-def render_fem_cache_panel(
-    values: dict[str, object],
-    fem_lookup: dict[str, object] | None,
-    cache_points: list[dict[str, object]],
-    cache_curve: tuple[np.ndarray, np.ndarray] | None,
-    cache_error: str | None,
-) -> None:
-    st.subheader("FEM Cache")
-    if cache_error:
-        st.caption(cache_error)
-    if fem_lookup is None:
-        st.info("No fem-prerun.json/base DAT was found, so FEM cache lookup is disabled.")
-        return
-    if not cache_points:
-        st.info("No FEM cache points are in the shared store yet.")
-        return
-
-    exact_point = next(
-        (
-            point
-            for point in cache_points
-            if fem_cache_point_matches(
-                point,
-                float(values["resonance_hz"]),
-                float(values["mass_ratio"]),
-                float(values["resonator_loss_factor"]),
-            )
-        ),
-        None,
-    )
-    if cache_curve is not None:
-        point = exact_point
-        label = _format_cache_point(point) if point is not None else "current controls"
-        st.success(f"Loaded cached FEM curve: {label}.")
-    elif exact_point is not None:
-        st.warning(
-            "A FEM point with the current coordinates exists, but it did not match "
-            "the active base-DAT cache signature."
+            **Acknowledgements**
+            {ABOUT_ACKNOWLEDGEMENTS}
+            """
         )
-    else:
-        nearest = nearest_fem_cache_point(
-            cache_points,
-            float(values["resonance_hz"]),
-            float(values["mass_ratio"]),
-            float(values["resonator_loss_factor"]),
-        )
-        if nearest is not None:
-            st.info(f"Nearest buffered point: {_format_cache_point(nearest)}.")
-
-    table = build_fem_cache_points_table(cache_points)
-    st.dataframe(
-        table,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "f_res [Hz]": st.column_config.NumberColumn(format="%.1f"),
-            "m_ratio [%]": st.column_config.NumberColumn(format="%.1f"),
-            "eta_res [-]": st.column_config.NumberColumn(format="%.3f"),
-        },
-    )
 
 
 def main() -> None:
-    st.set_page_config(page_title="FEM Analytical Filter Window App", layout="wide")
-    st.title("FEM/Analytical Resonator Filter")
+    st.set_page_config(page_title="Auralization Comparison", layout="wide")
+    render_demo_styles()
+    render_brand_header()
 
     fem_lookup = prepare_fem_cache_lookup()
     cache_points, cache_error = load_fem_cache_points()
-    values = render_sidebar(cache_points)
+    del cache_error
+    values = render_demo_controls(cache_points)
     show_fem_cache = values.pop("show_fem_cache", False)
-    show_fem_lrm = values.pop("show_fem_lrm", False)
+    values.pop("show_fem_lrm", False)
     try:
         with st.spinner("Updating analytical filter..."):
             infinite, finite_results = compute_curves(**values)
     except ValueError as exc:
         st.error(str(exc))
         return
-
-    available_fem_csv = load_fem_lrm_curves()
-    fem_lrm_curves = {
-        window: available_fem_csv[window]
-        for window in values["selected_windows"]
-        if window in available_fem_csv
-    }
-    if show_fem_lrm:
-        if not available_fem_csv:
-            st.info(f"No FEM LRM curves found in {FEM_RESULTS_DIR}.")
-        elif not fem_lrm_curves:
-            st.info(
-                "No legacy FEM CSV data for the selected windows. "
-                f"Available: {', '.join(sorted(available_fem_csv))}."
-            )
 
     fem_cache_curve = (
         load_current_fem_cache_curve(
@@ -1045,8 +1229,6 @@ def main() -> None:
         else None
     )
     fem_overlay_curves = {}
-    if show_fem_lrm:
-        fem_overlay_curves.update(fem_lrm_curves)
     if show_fem_cache and fem_cache_curve is not None:
         fem_overlay_curves[FEM_CACHE_CURVE_KEY] = fem_cache_curve
 
@@ -1056,11 +1238,11 @@ def main() -> None:
             finite_results,
             values["resonance_hz"],
             fem_overlay_curves,
+            f_min_hz=values["f_min_hz"],
+            f_max_hz=values["f_max_hz"],
         ),
         width="stretch",
     )
-
-    render_fem_cache_panel(values, fem_lookup, cache_points, fem_cache_curve, cache_error)
 
     render_auralization(
         infinite,
@@ -1068,6 +1250,7 @@ def main() -> None:
         build_filter_signature(values, infinite, finite_results, fem_overlay_curves),
         fem_overlay_curves,
     )
+    render_project_info_section()
 
 
 if __name__ == "__main__":
