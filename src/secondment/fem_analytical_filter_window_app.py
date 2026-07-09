@@ -118,16 +118,7 @@ RECORDED_AUDIO_CANDIDATES = (
     ("DATASEC hairdryer 0004", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
     ("DATASEC motorbike idling 0001", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
     ("DATASEC vacuum cleaner 0001", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
-    ("Heat pump measurement 10", "archive/Recordings/10_Measurement_10s.wav"),
-    ("Heat pump measurement 12", "archive/Recordings/12_Measurement_10s.wav"),
-    ("Heat pump max capacity 25", "archive/Recordings/25_MaxCapacity_10s.wav"),
-    ("Heat pump defrost 28", "archive/Recordings/28_Defrost_10s.wav"),
-    ("Car pass-by 0055", "archive/PA/repsig/car pass-by-0055.wav"),
-    ("Motorbike idling 0009", "archive/PA/repsig/motorbike idling-0009.wav"),
-    ("Vacuum cleaner 0024", "archive/PA/repsig/vacuum cleaner-0024.wav"),
-    ("Airplanes short", "archive/Scripts_Auralization_Lucas_20260420/sounds/Airplanes-006_short.wav"),
-    ("Air compressor", "archive/Scripts_Auralization_Lucas_20260420/sounds/air compressor-011.wav"),
-    ("Jackhammer short", "archive/Scripts_Auralization_Lucas_20260420/sounds/jackhammer-001_short.wav"),
+    ("SkyExpress Flight (Try to tune at 420 Hz)", "archive/Recordings/SkyExpress_Flight.wav")
 )
 
 
