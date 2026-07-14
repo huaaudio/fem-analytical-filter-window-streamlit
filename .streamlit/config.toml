@@ -1,0 +1,27 @@
+[theme]
+base = "light"
+primaryColor = "#007C83"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F7FA"
+textColor = "#102A43"
+linkColor = "#007C83"
+borderColor = "#D8E2EA"
+showWidgetBorder = true
+baseRadius = "0.75rem"
+buttonRadius = "0.75rem"
+chartCategoricalColors = ["#7A8793", "#007C83", "#B84E32", "#2563EB", "#7C3AED", "#64748B"]
+
+[client]
+toolbarMode = "viewer"
+showErrorDetails = "none"
+
+[server]
+headless = true
+maxUploadSize = 20
+enableCORS = true
+corsAllowedOrigins = ["https://www.heu-metavision.eu", "https://heu-metavision.eu"]
+enableXsrfProtection = true
+xsrfCookieSameSite = "none"
+
+[browser]
+gatherUsageStats = false

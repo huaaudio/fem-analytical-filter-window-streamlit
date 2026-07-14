@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import io
+import mimetypes
 import re
 import sys
 from pathlib import Path
@@ -30,8 +32,8 @@ from secondment.auralization_irbased import (
     ensure_even_length,
     ensure_mono,
 )
+from secondment.audio_compare_component import render_audio_comparison
 from secondment.compare_analytical_filter_window import (
-    DEFAULT_PAPER_WINDOW_NAMES,
     PAPER_WINDOW_SIZES_M,
     paper_window_area_m2,
     paper_window_label,
@@ -56,6 +58,12 @@ WINDOW_COLORS = {
     "A3": "#9467bd",
     "A4": "#8c564b",
 }
+COLOR_ANALYTICAL = "#007C83"
+COLOR_FEM = "#B84E32"
+COLOR_INFINITE = "#7A8793"
+COLOR_INK = "#102A43"
+COLOR_MUTED = "#52616F"
+COLOR_GRID = "#D8E2EA"
 DEFAULT_AUDIO_SAMPLE_RATE = 48000
 PROJECT_ROOT = SOURCE_ROOT.parent
 FIXED_MASS_RATIO = 0.20
@@ -68,7 +76,7 @@ FIXED_YOUNG_MODULUS = 70e9
 FIXED_POISSON_RATIO = 0.30
 FIXED_HOST_LOSS_FACTOR = 0.02
 FIXED_PARTITION_TYPE = "single"
-DEFAULT_RESONANCE_HZ = 300.0
+DEFAULT_RESONANCE_HZ = 420.0
 DEFAULT_F_MIN_HZ = 20.0
 DEFAULT_F_MAX_HZ = 5000.0
 DEMO_WINDOW_NAME = "A4"
@@ -125,12 +133,18 @@ REFERENCE_ITEMS = (
 FEM_RESULTS_DIR = PROJECT_ROOT / "fem" / "results"
 _FEM_LRM_FILENAME_RE = re.compile(r"^(A\d)_wall_lrm\.csv$", re.IGNORECASE)
 FEM_CACHE_CURVE_KEY = "Cache"
-UPLOAD_AUDIO_LABEL = "Upload WAV"
+UPLOAD_AUDIO_LABEL = "Use your own WAV"
 RECORDED_AUDIO_CANDIDATES = (
-    ("DATASEC hairdryer 0004", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
-    ("DATASEC motorbike idling 0001", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
-    ("DATASEC vacuum cleaner 0001", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
-    ("SkyExpress Flight (Try to tune at 420 Hz)", "archive/Recordings/SkyExpress_Flight.wav")
+    ("Aircraft cabin — works well at 420 Hz", "archive/Recordings/SkyExpress_Flight.wav"),
+    ("Hair dryer", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
+    ("Idling motorbike", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
+    ("Vacuum cleaner", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
+)
+METAVISION_DEMOS_URL = "https://www.heu-metavision.eu/dissemination/demos/"
+PRIMARY_AUDIO_LABELS = (
+    "Original",
+    "A4 panel — analytical simulation",
+    "A4 panel — FEM simulation",
 )
 
 
@@ -391,13 +405,13 @@ def discover_recorded_audio_files() -> dict[str, Path]:
 
 def fem_curve_display_label(key: str) -> str:
     if key == FEM_CACHE_CURVE_KEY:
-        return "FEM reference"
-    return f"FEM LRM {key} (CSV, diffuse)"
+        return "A4 panel — FEM simulation"
+    return f"FEM simulation — {key} panel"
 
 
 def fem_curve_color(key: str) -> str:
     if key == FEM_CACHE_CURVE_KEY:
-        return "#111827"
+        return COLOR_FEM
     return WINDOW_COLORS.get(key, "#555555")
 
 
@@ -417,6 +431,17 @@ def get_resource_path(relative_name: str) -> Path:
     if candidate.exists():
         return candidate
     return Path(__file__).resolve().parents[2] / relative_name
+
+
+@st.cache_data(show_spinner=False)
+def resource_data_uri(relative_name: str) -> str | None:
+    """Return a bundled image as a data URI for accessible app-owned markup."""
+    path = get_resource_path(relative_name)
+    if not path.exists():
+        return None
+    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def get_brand_logo_specs() -> list[dict[str, object]]:
@@ -575,9 +600,10 @@ def build_plot(
         go.Scatter(
             x=infinite.freqs_hz,
             y=infinite.stl_db,
-            name="Infinite panel",
+            name="Ideal infinite panel — analytical",
             mode="lines",
-            line={"color": "#1f77b4", "width": 3},
+            line={"color": COLOR_INFINITE, "width": 2.5, "dash": "dash"},
+            hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>Infinite analytical</extra>",
         )
     )
     for paper_name, result in finite_results.items():
@@ -587,9 +613,10 @@ def build_plot(
             go.Scatter(
                 x=result.freqs_hz,
                 y=result.stl_db,
-                name=paper_window_label(paper_name),
+                name=f"{paper_name} panel — analytical",
                 mode="lines",
-                line={"color": WINDOW_COLORS.get(paper_name), "width": 2.5},
+                line={"color": COLOR_ANALYTICAL, "width": 3},
+                hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>A4 analytical</extra>",
             )
         )
     for paper_name, (fem_freqs, fem_stl) in (fem_lrm_curves or {}).items():
@@ -607,6 +634,7 @@ def build_plot(
                     "size": 6 if paper_name == FEM_CACHE_CURVE_KEY else 5,
                     "symbol": "diamond-open" if paper_name == FEM_CACHE_CURVE_KEY else "circle-open",
                 },
+                hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>FEM simulation</extra>",
             )
         )
 
@@ -627,9 +655,9 @@ def build_plot(
         go.Scatter(
             x=[resonance_hz, resonance_hz],
             y=[y0, y1],
-            name="f_res",
+            name="Selected target frequency",
             mode="lines",
-            line={"color": "#202020", "width": 1, "dash": "dot"},
+            line={"color": COLOR_INK, "width": 1.5, "dash": "dot"},
             hoverinfo="skip",
             showlegend=False,
         )
@@ -638,26 +666,38 @@ def build_plot(
         go.Scatter(
             x=[resonance_hz],
             y=[y1],
-            text=["f_res"],
+            text=[f"Target {resonance_hz:.0f} Hz"],
             mode="text",
             textposition="top center",
-            textfont={"color": "#202020", "size": 12},
+            textfont={"color": COLOR_INK, "size": 12},
             hoverinfo="skip",
             showlegend=False,
         )
     )
     fig.update_layout(
-        height=560,
-        margin={"l": 56, "r": 24, "t": 36, "b": 56},
+        height=430,
+        margin={"l": 56, "r": 24, "t": 40, "b": 88},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": COLOR_MUTED, "size": 12},
         xaxis={
-            "title": "Frequency [Hz]",
+            "title": "Frequency (Hz)",
             "type": "log",
             "range": [float(np.log10(f_min)), float(np.log10(f_max))],
             "showgrid": True,
-            "minor": {"showgrid": True},
+            "gridcolor": COLOR_GRID,
+            "minor": {"showgrid": True, "gridcolor": "rgba(216,226,234,0.5)"},
+            "zeroline": False,
         },
-        yaxis={"title": "STL [dB]", "range": [y0, y1], "showgrid": True},
-        legend={"orientation": "h", "y": 1.12, "x": 0.0},
+        yaxis={
+            "title": "Sound transmission loss (dB) — higher is better",
+            "range": [y0, y1],
+            "showgrid": True,
+            "gridcolor": COLOR_GRID,
+            "zeroline": False,
+        },
+        legend={"orientation": "h", "y": -0.22, "x": 0.0, "font": {"size": 11}},
+        hovermode="x unified",
     )
     return fig
 
@@ -804,7 +844,12 @@ def build_audio_spectrogram(
     frequency_ceiling = min(float(max_frequency_hz), float(sample_rate) / 2.0)
     keep = (freqs > 0.0) & (freqs <= frequency_ceiling)
     if not np.any(keep):
-        return times, np.array([max(1.0, frequency_ceiling)]), np.array([[-80.0] * times.size])
+        times = (starts.astype(np.float64) + 0.5 * frame_size) / float(sample_rate)
+        return (
+            times,
+            np.array([max(1.0, frequency_ceiling)]),
+            np.full((1, times.size), -80.0),
+        )
     freqs = freqs[keep]
     magnitude = np.abs(spectrum[:, keep]).T
     magnitude_db = 20.0 * np.log10(np.maximum(magnitude, 1e-9))
@@ -909,8 +954,8 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
 
 def build_audio_output_label(paper_name: str) -> str:
     if paper_name == DEMO_WINDOW_NAME:
-        return "A4 size analytical"
-    return f"{paper_window_label(paper_name)} analytical"
+        return "A4 panel — analytical simulation"
+    return f"{paper_window_label(paper_name)} — analytical simulation"
 
 
 def fem_stl_to_transmission_amplitude(stl_db: np.ndarray) -> np.ndarray:
@@ -1029,39 +1074,197 @@ def render_demo_styles() -> None:
     st.markdown(
         """
         <style>
+        :root {
+            --mv-ink: #102A43;
+            --mv-muted: #52616F;
+            --mv-border: #D8E2EA;
+            --mv-surface: #F4F7FA;
+            --mv-analytical: #007C83;
+            --mv-fem: #B84E32;
+        }
+        html {
+            scroll-behavior: smooth;
+        }
         .block-container {
-            padding-top: 1.4rem;
-            padding-bottom: 2.5rem;
-            max-width: 1280px;
+            padding-top: 0.8rem;
+            padding-bottom: 3.5rem;
+            max-width: 1120px;
         }
-        [data-testid="stSidebar"] {
-            display: none;
+        .mv-brand-rail {
+            min-height: 3.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.5rem;
+            border-bottom: 1px solid var(--mv-border);
         }
-        .demo-top-rule {
-            border-top: 1px solid #d9dde5;
-            margin: 1.0rem 0 1.2rem;
+        .mv-brand-lockup {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            min-width: 0;
         }
-        .demo-kicker {
-            color: #5f6878;
-            font-size: 0.86rem;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            margin-bottom: 0.2rem;
+        .mv-brand-lockup img {
+            display: block;
+            width: 176px;
+            max-height: 38px;
+            object-fit: contain;
+            object-position: left center;
         }
-        .demo-meta {
-            color: #4f5665;
-            font-size: 0.95rem;
-            line-height: 1.45;
+        .mv-brand-lockup span {
+            color: var(--mv-muted);
+            font-size: 0.92rem;
+            white-space: nowrap;
         }
-        .audio-card-title {
+        .mv-brand-rail a {
+            color: var(--mv-ink);
             font-weight: 700;
-            color: #202635;
-            margin-bottom: 0.15rem;
+            text-decoration: none;
+            white-space: nowrap;
         }
-        .audio-card-caption {
-            color: #667085;
+        .mv-brand-rail a:hover,
+        .mv-brand-rail a:focus-visible {
+            color: var(--mv-analytical);
+            text-decoration: underline;
+            text-underline-offset: 0.2rem;
+        }
+        .mv-hero {
+            max-width: 760px;
+            padding: 3.4rem 0 2.5rem;
+        }
+        .mv-hero h1 {
+            color: var(--mv-ink);
+            font-size: clamp(2.25rem, 5vw, 3.35rem);
+            line-height: 1.06;
+            letter-spacing: -0.035em;
+            margin: 0 0 1.1rem;
+            max-width: 740px;
+        }
+        .mv-hero-copy {
+            color: var(--mv-muted);
+            font-size: 1.12rem;
+            line-height: 1.65;
+            max-width: 700px;
+            margin: 0;
+        }
+        .mv-hero-note {
+            color: var(--mv-ink);
+            font-size: 0.92rem;
+            font-weight: 650;
+            margin: 1.1rem 0 0;
+        }
+        .mv-stage-title {
+            color: var(--mv-ink);
+            font-size: 1.45rem;
+            line-height: 1.25;
+            margin: 0 0 0.25rem;
+        }
+        .mv-stage-copy,
+        .mv-evidence-copy {
+            color: var(--mv-muted);
+            line-height: 1.65;
+            margin: 0 0 1.25rem;
+        }
+        .mv-result-lede {
+            border-left: 4px solid var(--mv-analytical);
+            padding: 0.25rem 0 0.25rem 1.15rem;
+            margin: 2.75rem 0 1.5rem;
+        }
+        .mv-result-lede strong {
+            color: var(--mv-ink);
+            display: block;
+            font-size: 1.05rem;
+            margin-bottom: 0.25rem;
+        }
+        .mv-result-lede p {
+            color: var(--mv-muted);
+            font-size: 1.02rem;
+            line-height: 1.6;
+            margin: 0;
+        }
+        .mv-model-snapshot {
+            color: var(--mv-muted);
+            line-height: 1.65;
+            margin: 0.5rem 0 1rem;
+        }
+        .mv-model-snapshot strong {
+            color: var(--mv-ink);
+        }
+        .mv-partner-strip {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 2rem 3rem;
+            padding: 1.5rem 0 0.5rem;
+        }
+        .mv-partner {
+            flex: 1 1 180px;
+            min-width: 150px;
+            text-align: center;
+        }
+        .mv-partner img {
+            display: block;
+            max-width: 210px;
+            width: auto;
+            height: 44px;
+            object-fit: contain;
+            margin: 0 auto 0.45rem;
+        }
+        .mv-partner span {
+            color: var(--mv-muted);
+            font-size: 0.82rem;
+        }
+        .mv-footer-note {
+            color: var(--mv-muted);
             font-size: 0.88rem;
-            margin-bottom: 0.55rem;
+            line-height: 1.6;
+            margin-top: 1rem;
+        }
+        @media (max-width: 640px) {
+            .block-container {
+                padding: 0.45rem 1rem 2.5rem;
+            }
+            .mv-brand-rail {
+                min-height: 3.25rem;
+                gap: 0.75rem;
+            }
+            .mv-brand-lockup img {
+                width: 138px;
+                max-height: 32px;
+            }
+            .mv-brand-lockup span {
+                display: none;
+            }
+            .mv-brand-rail a {
+                font-size: 0.84rem;
+            }
+            .mv-hero {
+                padding: 2.25rem 0 1.75rem;
+            }
+            .mv-hero h1 {
+                font-size: 2rem;
+                line-height: 1.1;
+                letter-spacing: -0.025em;
+            }
+            .mv-hero-copy {
+                font-size: 1rem;
+                line-height: 1.55;
+            }
+            .mv-result-lede {
+                margin-top: 2rem;
+            }
+            .mv-partner-strip {
+                gap: 1.5rem;
+            }
+            .mv-partner {
+                flex-basis: 120px;
+                min-width: 110px;
+            }
+            .mv-partner img {
+                max-width: 150px;
+                height: 36px;
+            }
         }
         </style>
         """,
@@ -1069,177 +1272,508 @@ def render_demo_styles() -> None:
     )
 
 
-def render_brand_header() -> None:
-    title_col, logos_col = st.columns([1.65, 1.35], gap="large")
-    with title_col:
-        st.title("Auralization Comparison: Local Resonant Metamaterial Analytical vs FEM Response")
-    with logos_col:
-        st.caption("Project Partners")
-        logo_columns = st.columns(len(BRAND_LOGOS), gap="medium")
-        for column, spec in zip(logo_columns, get_brand_logo_specs()):
-            with column:
-                path = Path(spec["path"])
-                if path.exists():
-                    st.image(str(path), width=int(spec["width"]))
-                else:
-                    st.caption(str(spec["label"]))
-    st.markdown('<div class="demo-top-rule"></div>', unsafe_allow_html=True)
+def render_brand_rail() -> None:
+    logo_uri = resource_data_uri("archive/metavision.png")
+    logo_markup = (
+        f'<img src="{logo_uri}" alt="METAVISION — Metamaterials for Vibration and Sound Reduction">'
+        if logo_uri
+        else "<strong>METAVISION</strong>"
+    )
+    st.markdown(
+        f"""
+        <nav class="mv-brand-rail" aria-label="Demo navigation">
+            <div class="mv-brand-lockup">
+                {logo_markup}
+                <span>Interactive listening demo</span>
+            </div>
+            <a href="{METAVISION_DEMOS_URL}">Back to METAVISION</a>
+        </nav>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-def render_demo_controls(cache_points: list[dict[str, object]]) -> dict[str, object]:
-    control_col, info_col = st.columns([1.0, 1.45], gap="large")
-    with control_col:
-        st.markdown('<div class="demo-kicker">Demonstration setting</div>', unsafe_allow_html=True)
-        cached_frequencies = cached_resonance_frequencies(cache_points)
-        if cached_frequencies:
-            default_index = 0
-            if DEFAULT_RESONANCE_HZ in cached_frequencies:
-                default_index = cached_frequencies.index(DEFAULT_RESONANCE_HZ)
-            resonance_hz = st.select_slider(
-                "Resonance frequency [Hz]",
-                options=cached_frequencies,
-                value=cached_frequencies[default_index],
-                format_func=lambda value: f"{float(value):.0f} Hz",
-            )
-        else:
-            resonance_hz = st.slider(
-                "Resonance frequency [Hz]", 100.0, 2000.0, DEFAULT_RESONANCE_HZ, 10.0
-            )
-    with info_col:
+def render_hero() -> None:
+    st.markdown(
+        """
+        <section class="mv-hero" aria-labelledby="mv-page-title">
+            <h1 id="mv-page-title">Hear how a metamaterial panel changes sound</h1>
+            <p class="mv-hero-copy">
+                Choose a sound and target frequency, then compare two computer predictions
+                for an A4-sized acoustic panel. Both results are simulations, not physical measurements.
+            </p>
+            <p class="mv-hero-note">Headphones recommended · About one minute</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def preferred_resonance_frequency(cached_frequencies: list[float]) -> float:
+    if not cached_frequencies:
+        return DEFAULT_RESONANCE_HZ
+    return min(cached_frequencies, key=lambda value: abs(float(value) - DEFAULT_RESONANCE_HZ))
+
+
+def build_audio_source_signature(
+    source_type: str,
+    duration_seconds: float,
+    uploaded_file,
+) -> tuple[object, ...]:
+    if uploaded_file is None:
+        return source_type, round(float(duration_seconds), 3)
+    return (
+        source_type,
+        getattr(uploaded_file, "name", None),
+        getattr(uploaded_file, "size", None),
+        round(float(duration_seconds), 3),
+    )
+
+
+def render_demo_controls(
+    cache_points: list[dict[str, object]],
+) -> tuple[dict[str, object], dict[str, object]]:
+    recorded_audio = discover_recorded_audio_files()
+    audio_options = [*recorded_audio, UPLOAD_AUDIO_LABEL]
+    with st.container(border=True, key="listening_stage"):
         st.markdown(
-            (
-                '<div class="demo-meta">'
-                "<strong>A4 sized panel</strong><br>"
-                "Analytical infinite and finite-window local resonant metamaterial responses are compared "
-                "against the matching diffuse-field Finite Element Method (FEM) reference calculated with Siemens Simcenter3D. "
-                f"The display range is {DEFAULT_F_MIN_HZ:.0f} Hz to {DEFAULT_F_MAX_HZ / 1000.0:.1f} kHz."
-                "</div>"
-            ),
+            """
+            <h2 class="mv-stage-title">Create your listening comparison</h2>
+            <p class="mv-stage-copy">
+                Start with an included recording, then tune the frequency the panel is designed to target.
+            </p>
+            """,
             unsafe_allow_html=True,
         )
-    return build_demo_values(float(resonance_hz))
+        source_col, target_col = st.columns(2, gap="large")
+        with source_col:
+            source_type = st.selectbox(
+                "1. Pick a sound",
+                options=audio_options,
+                index=0,
+                key="audio_source",
+                help="Included recordings are ready to compare. Choose the upload option only if you want to use your own WAV file.",
+            )
+            if source_type != UPLOAD_AUDIO_LABEL:
+                st.caption("A curated eight-second excerpt will be used.")
+
+        with target_col:
+            cached_frequencies = cached_resonance_frequencies(cache_points)
+            default_resonance = preferred_resonance_frequency(cached_frequencies)
+            if cached_frequencies:
+                resonance_hz = st.select_slider(
+                    "2. Tune the panel",
+                    options=cached_frequencies,
+                    value=default_resonance,
+                    format_func=lambda value: f"{float(value):.0f} Hz",
+                    key="resonance_hz",
+                    help="The resonators are tuned to reduce sound energy around this frequency.",
+                )
+            else:
+                resonance_hz = st.slider(
+                    "2. Tune the panel",
+                    100.0,
+                    2000.0,
+                    float(default_resonance),
+                    10.0,
+                    key="resonance_hz",
+                    help="The resonators are tuned to reduce sound energy around this frequency.",
+                )
+            st.caption(f"The panel targets sound energy around {float(resonance_hz):.0f} Hz.")
+
+        uploaded_file = None
+        duration_seconds = 8.0
+        if source_type == UPLOAD_AUDIO_LABEL:
+            uploaded_file = st.file_uploader(
+                "Upload a WAV recording",
+                type=["wav"],
+                key="audio_upload",
+                help="Maximum size: 20 MB.",
+            )
+            duration_seconds = st.slider(
+                "Excerpt duration",
+                5.0,
+                10.0,
+                8.0,
+                0.5,
+                key="upload_duration",
+                format="%.1f seconds",
+            )
+            st.caption(
+                "Your WAV is processed in memory for this browser session and is not intentionally saved. "
+                "Do not upload confidential recordings."
+            )
+
+        run_comparison = st.button(
+            "Create listening comparison",
+            type="primary",
+            width="stretch",
+            key="run_comparison",
+            disabled=source_type == UPLOAD_AUDIO_LABEL and uploaded_file is None,
+        )
+
+    values = build_demo_values(float(resonance_hz))
+    request = {
+        "source_type": source_type,
+        "source_path": recorded_audio.get(source_type),
+        "uploaded_file": uploaded_file,
+        "duration_seconds": float(duration_seconds),
+        "run_comparison": bool(run_comparison),
+        "source_signature": build_audio_source_signature(
+            source_type,
+            duration_seconds,
+            uploaded_file,
+        ),
+    }
+    return values, request
 
 
 def render_auralization(
     infinite,
     finite_results: dict[str, object],
     filter_signature: tuple,
+    audio_request: dict[str, object],
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
-    st.divider()
-    st.header("Auralization comparison")
     fem_lrm_curves = fem_lrm_curves or {}
+    result_signature = (filter_signature, audio_request["source_signature"])
     stored_result = st.session_state.get("window_auralization")
-    if stored_result is not None and stored_result.get("filter_signature") != filter_signature:
+    if stored_result is not None and stored_result.get("result_signature") != result_signature:
         st.session_state.pop("window_auralization", None)
 
-    recorded_audio = discover_recorded_audio_files()
-    audio_options = [UPLOAD_AUDIO_LABEL, *recorded_audio]
-    source_col, duration_col, action_col = st.columns([1.45, 1.0, 0.85], gap="large")
-    with source_col:
-        source_type = st.selectbox("Audio source", options=audio_options)
-    with duration_col:
-        duration_seconds = st.slider("Duration [s]", 5.0, 10.0, 8.0, 0.5)
-    uploaded_file = None
-    if source_type == UPLOAD_AUDIO_LABEL:
-        uploaded_file = st.file_uploader("WAV file", type=["wav"])
+    if bool(audio_request["run_comparison"]):
+        st.session_state.pop("window_auralization", None)
+        try:
+            audio_signal, sample_rate = load_requested_audio(audio_request)
+            with st.spinner("Creating the listening comparison…"):
+                infinite_audio, finite_audio, fem_audio = auralize_window_filters(
+                    audio_signal,
+                    sample_rate,
+                    infinite,
+                    finite_results,
+                    fem_lrm_curves,
+                )
 
-    with action_col:
-        st.write("")
-        run_auralization = st.button("Run comparison", type="primary", width="stretch")
-
-    if run_auralization:
-        if source_type == UPLOAD_AUDIO_LABEL:
-            if uploaded_file is None:
-                st.warning("Upload a WAV file first.")
-                return
-            audio_signal, sample_rate = decode_uploaded_wav(uploaded_file)
-            audio_signal = trim_audio(audio_signal, sample_rate, duration_seconds)
-        else:
-            audio_signal, sample_rate = load_wav_file(recorded_audio[source_type])
-            audio_signal = trim_audio(audio_signal, sample_rate, duration_seconds)
-
-        with st.spinner("Building windowed audio..."):
-            infinite_audio, finite_audio, fem_audio = auralize_window_filters(
-                audio_signal,
-                sample_rate,
-                infinite,
-                finite_results,
-                fem_lrm_curves,
-            )
-            playback_signals = {
-                "Original": infinite_audio.input_signal,
-                "Infinite panel": infinite_audio.output_signal,
+            primary_signals: dict[str, np.ndarray] = {
+                "Original": np.asarray(infinite_audio.input_signal, dtype=np.float64),
             }
-            playback_signals.update(
-                {
-                    build_audio_output_label(paper_name): result.output_signal
-                    for paper_name, result in finite_audio.items()
-                }
-            )
-            playback_signals.update(
-                {
-                    fem_curve_display_label(paper_name): result.output_signal
-                    for paper_name, result in fem_audio.items()
-                }
-            )
+            for paper_name, result in finite_audio.items():
+                primary_signals[build_audio_output_label(paper_name)] = np.asarray(
+                    result.output_signal,
+                    dtype=np.float64,
+                )
+            for paper_name, result in fem_audio.items():
+                primary_signals[fem_curve_display_label(paper_name)] = np.asarray(
+                    result.output_signal,
+                    dtype=np.float64,
+                )
+            infinite_signal = np.asarray(infinite_audio.output_signal, dtype=np.float64)
+            all_signals = [*primary_signals.values(), infinite_signal]
+            if any(signal.size < 2 or not np.all(np.isfinite(signal)) for signal in all_signals):
+                raise ValueError("The processed audio contains no usable samples.")
+
+            level_deltas = build_level_deltas(primary_signals)
             st.session_state["window_auralization"] = {
-                "signals": normalize_audio_group(playback_signals),
-                "sample_rate": infinite_audio.sample_rate,
+                "primary_signals": primary_signals,
+                "infinite_signal": infinite_signal,
+                "level_deltas": level_deltas,
+                "sample_rate": int(infinite_audio.sample_rate),
                 "debug": infinite_audio.sample_rate_debug,
-                "filter_signature": filter_signature,
+                "result_signature": result_signature,
             }
+        except (EOFError, OSError, ValueError, TypeError):
+            st.error(
+                "We could not create this comparison. If you uploaded a file, try a standard "
+                "PCM or floating-point WAV and make sure it contains audible samples."
+            )
+        except Exception:
+            st.error("The listening comparison is temporarily unavailable. Please try again.")
 
     result_state = st.session_state.get("window_auralization")
     if result_state is None:
+        st.caption("Your listening comparison will appear here after processing.")
         return
 
-    debug = result_state["debug"]
-    st.caption(
-        f"Processed at {debug.processing_rate} Hz "
-        f"({debug.selection_mode}; input {debug.input_rate} Hz; response to {debug.max_frequency:.1f} Hz)."
+    signals = result_state["primary_signals"]
+    level_deltas = result_state["level_deltas"]
+    summary = build_listening_summary(level_deltas)
+    st.markdown(
+        f"""
+        <div class="mv-result-lede" role="status">
+            <strong>What changed in this simulation</strong>
+            <p>{summary}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    signals = result_state["signals"]
     sample_rate = int(result_state["sample_rate"])
-    original_level = audio_level_db(next(iter(signals.values())))
-    colors = ["#475467", "#1f77b4", "#8c564b", "#111827", "#2ca02c", "#9467bd"]
-    columns = st.columns(2, gap="large")
-    for index, (label, signal) in enumerate(signals.items()):
-        with columns[index % 2]:
-            with st.container(border=True):
-                level = audio_level_db(signal)
-                delta = level - original_level
-                st.markdown(f'<div class="audio-card-title">{label}</div>', unsafe_allow_html=True)
-                st.markdown(
-                    (
-                        '<div class="audio-card-caption">'
-                        f"RMS level {level:.1f} dBFS, {delta:+.1f} dB vs original"
-                        "</div>"
-                    ),
-                    unsafe_allow_html=True,
-                )
-                st.plotly_chart(
-                    build_audio_card_figure(signal, sample_rate, colors[index % len(colors)]),
-                    width="stretch",
-                    config={"displayModeBar": False},
-                )
-                st.audio(signal, sample_rate=sample_rate, format="audio/wav")
+    descriptions = {
+        "Original": "The unprocessed recording used as the listening reference.",
+        "A4 panel — analytical simulation": "A fast analytical prediction for an A4-sized panel.",
+        "A4 panel — FEM simulation": "A finite-element prediction for the same panel and tuning.",
+    }
+    render_audio_comparison(
+        signals,
+        sample_rate,
+        level_deltas_db=level_deltas,
+        descriptions=descriptions,
+        key="metavision_primary_audio_comparison",
+    )
+    st.caption(
+        "The player keeps the same time position when you switch versions. Level differences are "
+        "relative computer predictions, not calibrated sound-pressure measurements."
+    )
+
+    with st.expander("Additional model detail", expanded=False):
+        st.write(
+            "The ideal infinite-panel model removes edge effects. It is useful to researchers, "
+            "but the A4 analytical and FEM versions above are the more relevant public comparison."
+        )
+        st.audio(
+            result_state["infinite_signal"],
+            sample_rate=sample_rate,
+            format="audio/wav",
+        )
+        show_diagnostics = st.toggle(
+            "Show waveform and spectrogram",
+            value=False,
+            key="show_audio_diagnostics",
+        )
+        if show_diagnostics:
+            diagnostic_signals = {
+                **signals,
+                "Ideal infinite panel — analytical simulation": result_state["infinite_signal"],
+            }
+            selected_diagnostic = st.selectbox(
+                "Track to inspect",
+                options=list(diagnostic_signals),
+                key="audio_diagnostic_track",
+            )
+            st.plotly_chart(
+                build_audio_card_figure(
+                    diagnostic_signals[selected_diagnostic],
+                    sample_rate,
+                    COLOR_ANALYTICAL,
+                ),
+                width="stretch",
+                config={"displayModeBar": False},
+                key="audio_diagnostic_plot",
+            )
+
+
+def load_requested_audio(audio_request: dict[str, object]) -> tuple[np.ndarray, int]:
+    source_type = str(audio_request["source_type"])
+    duration_seconds = float(audio_request["duration_seconds"])
+    if source_type == UPLOAD_AUDIO_LABEL:
+        uploaded_file = audio_request.get("uploaded_file")
+        if uploaded_file is None:
+            raise ValueError("No WAV file was uploaded.")
+        audio_signal, sample_rate = decode_uploaded_wav(uploaded_file)
+    else:
+        source_path = audio_request.get("source_path")
+        if source_path is None:
+            raise ValueError("The selected example recording is unavailable.")
+        audio_signal, sample_rate = load_wav_file(Path(source_path))
+
+    if sample_rate <= 0:
+        raise ValueError("The WAV sample rate must be positive.")
+    audio_signal = trim_audio(audio_signal, sample_rate, duration_seconds)
+    if audio_signal.size < 2:
+        raise ValueError("The WAV file is empty.")
+    if not np.all(np.isfinite(audio_signal)):
+        raise ValueError("The WAV file contains invalid sample values.")
+    if float(np.max(np.abs(audio_signal))) < 1e-8:
+        raise ValueError("The WAV file is too quiet to compare.")
+    return audio_signal, int(sample_rate)
+
+
+def build_level_deltas(signals: dict[str, np.ndarray]) -> dict[str, float]:
+    if "Original" not in signals:
+        raise ValueError("An Original reference track is required.")
+    original_level = audio_level_db(signals["Original"])
+    return {
+        label: float(audio_level_db(signal) - original_level)
+        for label, signal in signals.items()
+    }
+
+
+def describe_level_delta(delta_db: float) -> str:
+    delta_db = float(delta_db)
+    if abs(delta_db) < 0.1:
+        return "about the same overall level as the original"
+    direction = "quieter" if delta_db < 0.0 else "louder"
+    return f"{abs(delta_db):.1f} dB {direction} overall than the original"
+
+
+def build_listening_summary(level_deltas: dict[str, float]) -> str:
+    analytical_label = "A4 panel — analytical simulation"
+    fem_label = "A4 panel — FEM simulation"
+    statements: list[str] = []
+    if analytical_label in level_deltas:
+        statements.append(
+            "The A4 analytical version is "
+            f"{describe_level_delta(level_deltas[analytical_label])}."
+        )
+    if fem_label in level_deltas:
+        statements.append(
+            "The FEM version is "
+            f"{describe_level_delta(level_deltas[fem_label])}."
+        )
+    else:
+        statements.append("A matching FEM result is not available for this target frequency.")
+    statements.append("Switch versions while playback continues to compare the same moment.")
+    return " ".join(statements)
+
+
+def interpolate_stl_at_frequency(
+    frequencies_hz: np.ndarray,
+    stl_db: np.ndarray,
+    target_hz: float,
+) -> float | None:
+    frequencies = np.asarray(frequencies_hz, dtype=np.float64)
+    values = np.asarray(stl_db, dtype=np.float64)
+    valid = np.isfinite(frequencies) & np.isfinite(values) & (frequencies > 0.0)
+    if not np.any(valid):
+        return None
+    frequencies = frequencies[valid]
+    values = values[valid]
+    order = np.argsort(frequencies)
+    frequencies = frequencies[order]
+    values = values[order]
+    if target_hz < frequencies[0] or target_hz > frequencies[-1]:
+        return None
+    return float(np.interp(float(target_hz), frequencies, values))
+
+
+def render_evidence_section(
+    infinite,
+    finite_results: dict[str, object],
+    resonance_hz: float,
+    fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]],
+    cache_error: str | None = None,
+) -> None:
+    st.divider()
+    st.markdown(
+        """
+        <div>
+            <h2>Why do the simulations sound different?</h2>
+            <p class="mv-evidence-copy">
+                Each line predicts how much sound the panel stops at each frequency. Higher values mean
+                less modeled sound passes through. The analytical model is quick and simplified; FEM
+                resolves the panel numerically, so the two methods do not produce exactly the same curve.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    finite_result = finite_results.get(DEMO_WINDOW_NAME)
+    if finite_result is None and finite_results:
+        finite_result = next(iter(finite_results.values()))
+    analytical_value = (
+        interpolate_stl_at_frequency(
+            finite_result.freqs_hz,
+            finite_result.stl_db,
+            resonance_hz,
+        )
+        if finite_result is not None
+        else None
+    )
+    infinite_value = interpolate_stl_at_frequency(
+        infinite.freqs_hz,
+        infinite.stl_db,
+        resonance_hz,
+    )
+    fem_curve = fem_lrm_curves.get(FEM_CACHE_CURVE_KEY)
+    fem_value = (
+        interpolate_stl_at_frequency(fem_curve[0], fem_curve[1], resonance_hz)
+        if fem_curve is not None
+        else None
+    )
+
+    snapshot_lines = [f"- **Selected target:** {resonance_hz:.0f} Hz"]
+    if analytical_value is not None:
+        snapshot_lines.append(f"- **A4 analytical prediction at the target:** {analytical_value:.1f} dB")
+    if fem_value is not None:
+        snapshot_lines.append(f"- **A4 FEM prediction at the target:** {fem_value:.1f} dB")
+    if infinite_value is not None:
+        snapshot_lines.append(f"- **Ideal infinite-panel prediction at the target:** {infinite_value:.1f} dB")
+    st.markdown("\n".join(snapshot_lines))
+
+    if fem_curve is None:
+        st.warning(
+            "A matching FEM result is not available for this frequency, so this view shows the "
+            "analytical predictions only."
+        )
+    st.plotly_chart(
+        build_plot(
+            infinite,
+            finite_results,
+            resonance_hz,
+            fem_lrm_curves,
+            f_min_hz=DEFAULT_F_MIN_HZ,
+            f_max_hz=DEFAULT_F_MAX_HZ,
+        ),
+        width="stretch",
+        config={"displayModeBar": False, "scrollZoom": False},
+        key="model_evidence_plot",
+    )
+    st.caption(
+        "Sound transmission loss is a model output in decibels. It should not be read as the "
+        "sound level a listener would measure in a specific room."
+    )
+
+    with st.expander("Model assumptions and technical details", expanded=False):
+        width_m, height_m = PAPER_WINDOW_SIZES_M[DEMO_WINDOW_NAME]
+        st.markdown(
+            f"""
+            - **Panel size:** A4 ({width_m * 1000:.0f} × {height_m * 1000:.0f} mm)
+            - **Host panel:** {FIXED_THICKNESS_M * 1000:.1f} mm aluminium-like plate
+            - **Resonator mass ratio:** {FIXED_MASS_RATIO * 100:.0f}%
+            - **Resonator loss factor:** {FIXED_RESONATOR_LOSS_FACTOR:.2f}
+            - **Incidence model:** diffuse-field average
+            - **Analytical curves:** infinite-panel reference plus a finite A4 correction
+            - **FEM curve:** cached SOL 108 finite-element result for the selected tuning
+
+            Both listening versions apply the modeled transmission response to the same source recording.
+            They are simulations and have not been level-calibrated to a particular loudspeaker, room, or listener.
+            """
+        )
+        if cache_error:
+            st.caption("The FEM cache could not be read during this session.")
 
 
 def render_project_info_section() -> None:
     st.divider()
-    with st.expander("Project information", expanded=False):
+    st.subheader("About this demonstration")
+    st.write(
+        "This public listening demo was created within METAVISION, a Horizon Europe Doctoral "
+        "Network studying metamaterials for vibration and sound reduction."
+    )
+    project_col, privacy_col = st.columns(2, gap="large")
+    with project_col:
         st.markdown(
             f"""
-            **Author**
+            **Research and contact**
+
             {ABOUT_AUTHOR}
 
-            **Contact**
-            {ABOUT_CONTACT}
-
-            **Acknowledgements**
-            {ABOUT_ACKNOWLEDGEMENTS}
+            [{ABOUT_CONTACT}](mailto:{ABOUT_CONTACT})
             """
+        )
+    with privacy_col:
+        st.markdown(
+            """
+            **If you upload audio**
+
+            The file is processed in memory for this browser session and is not intentionally saved by
+            the application. Do not upload confidential or personally identifying recordings.
+            """
+        )
+
+    with st.expander("Funding and acknowledgements", expanded=False):
+        st.markdown(
+            ABOUT_ACKNOWLEDGEMENTS
         )
     with st.expander("References", expanded=False):
         st.markdown(
@@ -1249,20 +1783,45 @@ def render_project_info_section() -> None:
             )
         )
 
+    partner_markup: list[str] = []
+    for logo in BRAND_LOGOS:
+        label = str(logo["label"])
+        logo_uri = resource_data_uri(str(logo["relative_path"]))
+        image_markup = f'<img src="{logo_uri}" alt="{label} logo">' if logo_uri else ""
+        partner_markup.append(
+            f'<div class="mv-partner">{image_markup}<span>{label}</span></div>'
+        )
+    st.markdown(
+        '<div class="mv-partner-strip" aria-label="Project partners">'
+        + "".join(partner_markup)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="mv-footer-note">Explore more demonstrations at '
+        f'<a href="{METAVISION_DEMOS_URL}">METAVISION</a>.</p>',
+        unsafe_allow_html=True,
+    )
+
 
 def main() -> None:
-    st.set_page_config(page_title="Auralization Comparison", layout="wide")
+    st.set_page_config(
+        page_title="Hear how a metamaterial panel changes sound | METAVISION",
+        page_icon="🔊",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
     render_demo_styles()
-    render_brand_header()
+    render_brand_rail()
+    render_hero()
 
     fem_lookup = prepare_fem_cache_lookup()
     cache_points, cache_error = load_fem_cache_points()
-    del cache_error
-    values = render_demo_controls(cache_points)
-    show_fem_cache = values.pop("show_fem_cache", False)
+    values, audio_request = render_demo_controls(cache_points)
+    show_fem_cache = bool(values.pop("show_fem_cache", False))
     values.pop("show_fem_lrm", False)
     try:
-        with st.spinner("Updating analytical filter..."):
+        with st.spinner("Updating the panel model…"):
             infinite, finite_results = compute_curves(**values)
     except ValueError as exc:
         st.error(str(exc))
@@ -1282,23 +1841,19 @@ def main() -> None:
     if show_fem_cache and fem_cache_curve is not None:
         fem_overlay_curves[FEM_CACHE_CURVE_KEY] = fem_cache_curve
 
-    st.plotly_chart(
-        build_plot(
-            infinite,
-            finite_results,
-            values["resonance_hz"],
-            fem_overlay_curves,
-            f_min_hz=values["f_min_hz"],
-            f_max_hz=values["f_max_hz"],
-        ),
-        width="stretch",
-    )
-
     render_auralization(
         infinite,
         finite_results,
         build_filter_signature(values, infinite, finite_results, fem_overlay_curves),
+        audio_request,
         fem_overlay_curves,
+    )
+    render_evidence_section(
+        infinite,
+        finite_results,
+        float(values["resonance_hz"]),
+        fem_overlay_curves,
+        cache_error,
     )
     render_project_info_section()
 

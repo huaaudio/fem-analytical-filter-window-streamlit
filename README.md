@@ -1,17 +1,47 @@
-# FEM Analytical Filter Window App
+# METAVISION acoustic panel listening demo
 
-Minimal Streamlit Cloud bundle for `secondment.fem_analytical_filter_window_app`.
+A public Streamlit demo for hearing how analytical and finite-element (FEM) simulations predict that an A4-sized locally resonant metamaterial panel changes sound. The guided experience begins with sample audio, a target-frequency control, a plain-language result, and optional technical detail. Both processed outputs are simulations, not physical measurements; headphones are recommended.
 
-Deploy with:
+## Run locally
+
+Create and activate a virtual environment, then install the application dependencies and start Streamlit:
 
 ```bash
-streamlit run streamlit_app.py
+python -m venv .venv
+# PowerShell: .\.venv\Scripts\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
+python -m pip install -r requirements.txt
+streamlit run streamlit_app.py --server.xsrfCookieSameSite=lax
 ```
 
-Included:
+The local override keeps uploads working over plain HTTP. The checked-in production setting uses
+`SameSite=None; Secure` so uploads also work when the HTTPS app is embedded on the METAVISION site.
+
+The bundle includes:
 
 - the app and its required `secondment` modules under `src/`
 - legacy FEM CSV overlay curves under `fem/results/`
 - FEM cache config, base DAT, and SQLite cache for cached SOL 108 curves
 
-The curated example WAV files from the research archive are intentionally omitted to keep the bundle small. WAV upload still works.
+The larger research-archive WAV collection is intentionally omitted to keep the deployment small. The app includes curated listening examples and accepts WAV uploads up to 20 MB.
+
+## Test
+
+```bash
+python -m pip install -r requirements-dev.txt
+pytest -q
+```
+
+## Upload privacy
+
+Uploaded audio is processed transiently for the active Streamlit session and this application does not intentionally save it to persistent storage. Do not upload sensitive or personally identifying recordings to a public deployment; the hosting provider's processing and privacy terms still apply.
+
+## Embed on the METAVISION site
+
+The deployed app can be presented without most Streamlit chrome by using its embed URL:
+
+```text
+https://metavision.streamlit.app/?embed=true
+```
+
+Use that URL as the `src` of a responsive `iframe` on the project site. The server configuration permits cross-origin uploads only from `https://www.heu-metavision.eu` and `https://heu-metavision.eu`; add an origin to `server.corsAllowedOrigins` before embedding elsewhere. Keep a direct “Open demo” link as a fallback for small screens, restrictive browser settings, or hosts that block framing.
