@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Visit Streamlit app
         env:
-          APP_URL: ${{ vars.STREAMLIT_APP_URL }}
+          APP_URL: ${{ vars.STREAMLIT_APP_URL || 'https://metavision.streamlit.app' }}
         run: |
           curl \
             --fail \
@@ -26,4 +26,4 @@ jobs:
             --retry-delay 10 \
             --max-time 90 \
             --user-agent "metavision-availability-check/1.0" \
-            "$APP_URL/"
+            "${APP_URL%/}/"
