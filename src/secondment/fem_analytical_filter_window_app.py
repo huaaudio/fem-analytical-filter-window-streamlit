@@ -61,6 +61,7 @@ WINDOW_COLORS = {
 COLOR_ANALYTICAL = "#007C83"
 COLOR_FEM = "#B84E32"
 COLOR_INFINITE = "#7A8793"
+COLOR_BARE = "#52616F"
 COLOR_INK = "#102A43"
 COLOR_MUTED = "#52616F"
 COLOR_GRID = "#D8E2EA"
@@ -127,6 +128,14 @@ REFERENCE_ITEMS = (
         "DataSEC - Dataset for Sound Event Classification of environmental noise. Zenodo.",
         "url": "https://doi.org/10.5281/zenodo.17033970",
     },
+    {
+        "label": "DIN 45692:2009-08. Measurement technique for the simulation of the auditory sensation of sharpness.",
+        "url": "https://www.dinmedia.de/en/standard/din-45692/117635111",
+    },
+    {
+        "label": "ISO/TS 20065:2022. Acoustics — Objective method for assessing the audibility of tones in noise — Engineering method.",
+        "url": "https://www.iso.org/standard/81518.html",
+    },
 )
 
 # openCFS FEM LRM (local-resonant metamaterial) STL exports, diffuse incidence.
@@ -136,15 +145,27 @@ FEM_CACHE_CURVE_KEY = "Cache"
 UPLOAD_AUDIO_LABEL = "Use your own WAV"
 RECORDED_AUDIO_CANDIDATES = (
     ("Aircraft cabin — works well at 420 Hz", "archive/Recordings/SkyExpress_Flight.wav"),
-    ("Hair dryer", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
-    ("Idling motorbike", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
-    ("Vacuum cleaner", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
+    ("Hair dryer — works well at 850 Hz", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
+    ("Idling motorbike — works well at 680 Hz", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
+    ("Vacuum cleaner — works well at 770 Hz", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
 )
 METAVISION_DEMOS_URL = "https://www.heu-metavision.eu/dissemination/demos/"
+ORIGINAL_AUDIO_LABEL = "Original"
+BARE_PANEL_AUDIO_LABEL = "Bare A4 panel — analytical simulation"
+ANALYTICAL_PANEL_AUDIO_LABEL = "A4 panel — analytical simulation"
+FEM_PANEL_AUDIO_LABEL = "A4 panel — FEM simulation"
+INFINITE_PANEL_AUDIO_LABEL = "Ideal infinite panel — analytical simulation"
 PRIMARY_AUDIO_LABELS = (
-    "Original",
-    "A4 panel — analytical simulation",
-    "A4 panel — FEM simulation",
+    ORIGINAL_AUDIO_LABEL,
+    BARE_PANEL_AUDIO_LABEL,
+    ANALYTICAL_PANEL_AUDIO_LABEL,
+    FEM_PANEL_AUDIO_LABEL,
+)
+DIAGNOSTIC_AUDIO_LABELS = (
+    ORIGINAL_AUDIO_LABEL,
+    INFINITE_PANEL_AUDIO_LABEL,
+    ANALYTICAL_PANEL_AUDIO_LABEL,
+    FEM_PANEL_AUDIO_LABEL,
 )
 
 
@@ -405,7 +426,7 @@ def discover_recorded_audio_files() -> dict[str, Path]:
 
 def fem_curve_display_label(key: str) -> str:
     if key == FEM_CACHE_CURVE_KEY:
-        return "A4 panel — FEM simulation"
+        return FEM_PANEL_AUDIO_LABEL
     return f"FEM simulation — {key} panel"
 
 
@@ -560,11 +581,25 @@ def compute_curves(
             )
         second_resonator = resonator if (second_plate_type or "meta") == "meta" else None
         leaves = (PartitionLeaf(host=host, resonator=resonator), PartitionLeaf(host=second_host, resonator=second_resonator))
+        bare_leaves = (
+            PartitionLeaf(host=host, resonator=None),
+            PartitionLeaf(host=second_host, resonator=None),
+        )
         cavities = (AirCavity(thickness_m=cavity_thickness_m),)
 
         def filter_call(size_type: str, **window_kwargs):
             return partition_pressure_filter(
                 freqs, leaves, cavities, size_type=size_type, **window_kwargs, **common_kwargs
+            )
+
+        def bare_filter_call(size_type: str, **window_kwargs):
+            return partition_pressure_filter(
+                freqs,
+                bare_leaves,
+                cavities,
+                size_type=size_type,
+                **window_kwargs,
+                **common_kwargs,
             )
     else:
         def filter_call(size_type: str, **window_kwargs):
@@ -577,12 +612,29 @@ def compute_curves(
                 **common_kwargs,
             )
 
+        def bare_filter_call(size_type: str, **window_kwargs):
+            return bending_panel_pressure_filter(
+                freqs,
+                host=host,
+                resonator=None,
+                size_type=size_type,
+                **window_kwargs,
+                **common_kwargs,
+            )
+
     infinite = filter_call("infinite")
     finite = {
         paper_name: filter_call("finite", window_area_m2=paper_window_area_m2(paper_name))
         for paper_name in selected_windows
     }
-    return infinite, finite
+    bare_finite = {
+        paper_name: bare_filter_call(
+            "finite",
+            window_area_m2=paper_window_area_m2(paper_name),
+        )
+        for paper_name in selected_windows
+    }
+    return infinite, finite, bare_finite
 
 
 def build_plot(
@@ -592,10 +644,24 @@ def build_plot(
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     f_min_hz: float | None = None,
     f_max_hz: float | None = None,
+    bare_results: dict[str, object] | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     freq_arrays = [np.asarray(infinite.freqs_hz, dtype=np.float64)]
     stl_arrays = [np.asarray(infinite.stl_db, dtype=np.float64)]
+    for paper_name, result in (bare_results or {}).items():
+        freq_arrays.append(np.asarray(result.freqs_hz, dtype=np.float64))
+        stl_arrays.append(np.asarray(result.stl_db, dtype=np.float64))
+        fig.add_trace(
+            go.Scatter(
+                x=result.freqs_hz,
+                y=result.stl_db,
+                name=f"Bare {paper_name} panel — analytical",
+                mode="lines",
+                line={"color": COLOR_BARE, "width": 2.25},
+                hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>Bare A4 analytical</extra>",
+            )
+        )
     fig.add_trace(
         go.Scatter(
             x=infinite.freqs_hz,
@@ -954,8 +1020,14 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
 
 def build_audio_output_label(paper_name: str) -> str:
     if paper_name == DEMO_WINDOW_NAME:
-        return "A4 panel — analytical simulation"
+        return ANALYTICAL_PANEL_AUDIO_LABEL
     return f"{paper_window_label(paper_name)} — analytical simulation"
+
+
+def build_bare_audio_output_label(paper_name: str) -> str:
+    if paper_name == DEMO_WINDOW_NAME:
+        return BARE_PANEL_AUDIO_LABEL
+    return f"Bare {paper_window_label(paper_name)} — analytical simulation"
 
 
 def fem_stl_to_transmission_amplitude(stl_db: np.ndarray) -> np.ndarray:
@@ -972,6 +1044,7 @@ def auralize_window_filters(
     input_rate: int,
     infinite,
     finite_results: dict[str, object],
+    bare_results: dict[str, object],
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ):
     fem_lrm_curves = fem_lrm_curves or {}
@@ -1001,6 +1074,18 @@ def auralize_window_filters(
         )
         for paper_name, result in finite_results.items()
     }
+    bare_audio = {
+        paper_name: auralize_with_frf(
+            audio_signal=audio_signal,
+            input_rate=int(input_rate),
+            frf_freqs=result.freqs_hz,
+            frf_response=result.pressure_frf,
+            response_kind="amplitude",
+            processing_rate=processing_rate,
+            auto_resample=False,
+        )
+        for paper_name, result in bare_results.items()
+    }
     fem_audio = {
         paper_name: auralize_with_frf(
             audio_signal=audio_signal,
@@ -1014,13 +1099,14 @@ def auralize_window_filters(
         for paper_name, (fem_freqs, fem_stl) in fem_lrm_curves.items()
         if fem_freqs.size
     }
-    return infinite_audio, finite_audio, fem_audio
+    return infinite_audio, bare_audio, finite_audio, fem_audio
 
 
 def build_filter_signature(
     values: dict[str, object],
     infinite,
     finite_results: dict[str, object],
+    bare_results: dict[str, object],
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> tuple:
     numeric_keys = (
@@ -1064,6 +1150,10 @@ def build_filter_signature(
             for paper_name, result in finite_results.items()
         ),
         tuple(
+            (paper_name, round(float(np.mean(result.stl_db)), 8))
+            for paper_name, result in bare_results.items()
+        ),
+        tuple(
             (paper_name, round(float(np.mean(stl)), 8))
             for paper_name, (_, stl) in sorted((fem_lrm_curves or {}).items())
         ),
@@ -1086,7 +1176,7 @@ def render_demo_styles() -> None:
             scroll-behavior: smooth;
         }
         .block-container {
-            padding-top: 0.8rem;
+            padding-top: 4.5rem;
             padding-bottom: 3.5rem;
             max-width: 1120px;
         }
@@ -1130,7 +1220,7 @@ def render_demo_styles() -> None:
         }
         .mv-hero {
             max-width: 760px;
-            padding: 3.4rem 0 2.5rem;
+            padding: 2.75rem 0 2.5rem;
         }
         .mv-hero h1 {
             color: var(--mv-ink);
@@ -1190,6 +1280,18 @@ def render_demo_styles() -> None:
         .mv-model-snapshot strong {
             color: var(--mv-ink);
         }
+        .audio-card-title {
+            color: var(--mv-ink);
+            font-weight: 700;
+            line-height: 1.35;
+            margin-bottom: 0.15rem;
+        }
+        .audio-card-caption {
+            color: var(--mv-muted);
+            font-size: 0.88rem;
+            line-height: 1.45;
+            margin-bottom: 0.55rem;
+        }
         .mv-partner-strip {
             display: flex;
             align-items: center;
@@ -1223,7 +1325,7 @@ def render_demo_styles() -> None:
         }
         @media (max-width: 640px) {
             .block-container {
-                padding: 0.45rem 1rem 2.5rem;
+                padding: 4rem 1rem 2.5rem;
             }
             .mv-brand-rail {
                 min-height: 3.25rem;
@@ -1240,7 +1342,7 @@ def render_demo_styles() -> None:
                 font-size: 0.84rem;
             }
             .mv-hero {
-                padding: 2.25rem 0 1.75rem;
+                padding: 1.75rem 0 1.75rem;
             }
             .mv-hero h1 {
                 font-size: 2rem;
@@ -1299,8 +1401,9 @@ def render_hero() -> None:
         <section class="mv-hero" aria-labelledby="mv-page-title">
             <h1 id="mv-page-title">Hear how a metamaterial panel changes sound</h1>
             <p class="mv-hero-copy">
-                Choose a sound and target frequency, then compare two computer predictions
-                for an A4-sized acoustic panel. Both results are simulations, not physical measurements.
+                Choose a sound and target frequency, then compare a bare A4 panel with analytical
+                and FEM predictions for the same panel with local resonators. Every result is a
+                simulation, not a physical measurement.
             </p>
             <p class="mv-hero-note">Headphones recommended · About one minute</p>
         </section>
@@ -1431,6 +1534,7 @@ def render_demo_controls(
 def render_auralization(
     infinite,
     finite_results: dict[str, object],
+    bare_results: dict[str, object],
     filter_signature: tuple,
     audio_request: dict[str, object],
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
@@ -1446,17 +1550,26 @@ def render_auralization(
         try:
             audio_signal, sample_rate = load_requested_audio(audio_request)
             with st.spinner("Creating the listening comparison…"):
-                infinite_audio, finite_audio, fem_audio = auralize_window_filters(
+                infinite_audio, bare_audio, finite_audio, fem_audio = auralize_window_filters(
                     audio_signal,
                     sample_rate,
                     infinite,
                     finite_results,
+                    bare_results,
                     fem_lrm_curves,
                 )
 
             primary_signals: dict[str, np.ndarray] = {
-                "Original": np.asarray(infinite_audio.input_signal, dtype=np.float64),
+                ORIGINAL_AUDIO_LABEL: np.asarray(
+                    infinite_audio.input_signal,
+                    dtype=np.float64,
+                ),
             }
+            for paper_name, result in bare_audio.items():
+                primary_signals[build_bare_audio_output_label(paper_name)] = np.asarray(
+                    result.output_signal,
+                    dtype=np.float64,
+                )
             for paper_name, result in finite_audio.items():
                 primary_signals[build_audio_output_label(paper_name)] = np.asarray(
                     result.output_signal,
@@ -1508,9 +1621,14 @@ def render_auralization(
     )
     sample_rate = int(result_state["sample_rate"])
     descriptions = {
-        "Original": "The unprocessed recording used as the listening reference.",
-        "A4 panel — analytical simulation": "A fast analytical prediction for an A4-sized panel.",
-        "A4 panel — FEM simulation": "A finite-element prediction for the same panel and tuning.",
+        ORIGINAL_AUDIO_LABEL: "The unprocessed recording used as the listening reference.",
+        BARE_PANEL_AUDIO_LABEL: "The same A4 host panel without local resonators.",
+        ANALYTICAL_PANEL_AUDIO_LABEL: (
+            "An analytical prediction for the A4 panel with local resonators."
+        ),
+        FEM_PANEL_AUDIO_LABEL: (
+            "A finite-element prediction for the same resonant panel and tuning."
+        ),
     }
     render_audio_comparison(
         signals,
@@ -1526,38 +1644,68 @@ def render_auralization(
 
     with st.expander("Additional model detail", expanded=False):
         st.write(
-            "The ideal infinite-panel model removes edge effects. It is useful to researchers, "
-            "but the A4 analytical and FEM versions above are the more relevant public comparison."
-        )
-        st.audio(
-            result_state["infinite_signal"],
-            sample_rate=sample_rate,
-            format="audio/wav",
+            "The original technical view compares the source, ideal infinite-panel model, "
+            "finite A4 analytical model, and FEM model. Each card combines a waveform, a "
+            "log-frequency spectrogram, and its own audio player."
         )
         show_diagnostics = st.toggle(
-            "Show waveform and spectrogram",
+            "Show four-track waveform and spectrogram comparison",
             value=False,
             key="show_audio_diagnostics",
         )
         if show_diagnostics:
-            diagnostic_signals = {
-                **signals,
-                "Ideal infinite panel — analytical simulation": result_state["infinite_signal"],
-            }
-            selected_diagnostic = st.selectbox(
-                "Track to inspect",
-                options=list(diagnostic_signals),
-                key="audio_diagnostic_track",
+            diagnostic_signals = normalize_audio_group(
+                build_diagnostic_signals(
+                    signals,
+                    result_state["infinite_signal"],
+                )
             )
-            st.plotly_chart(
-                build_audio_card_figure(
-                    diagnostic_signals[selected_diagnostic],
-                    sample_rate,
-                    COLOR_ANALYTICAL,
-                ),
-                width="stretch",
-                config={"displayModeBar": False},
-                key="audio_diagnostic_plot",
+            diagnostic_deltas = build_level_deltas(diagnostic_signals)
+            diagnostic_colors = {
+                ORIGINAL_AUDIO_LABEL: "#475467",
+                INFINITE_PANEL_AUDIO_LABEL: COLOR_INFINITE,
+                ANALYTICAL_PANEL_AUDIO_LABEL: COLOR_ANALYTICAL,
+                FEM_PANEL_AUDIO_LABEL: COLOR_FEM,
+            }
+            diagnostic_items = list(diagnostic_signals.items())
+            for row_start in range(0, len(diagnostic_items), 2):
+                columns = st.columns(2, gap="large")
+                for column_index, (label, signal) in enumerate(
+                    diagnostic_items[row_start : row_start + 2]
+                ):
+                    index = row_start + column_index
+                    with columns[column_index]:
+                        with st.container(border=True):
+                            delta = diagnostic_deltas[label]
+                            level_description = (
+                                "Reference level"
+                                if label == ORIGINAL_AUDIO_LABEL
+                                else describe_level_delta(delta)
+                            )
+                            st.markdown(
+                                f'<div class="audio-card-title">{label}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown(
+                                f'<div class="audio-card-caption">{level_description}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.plotly_chart(
+                                build_audio_card_figure(
+                                    signal,
+                                    sample_rate,
+                                    diagnostic_colors[label],
+                                ),
+                                width="stretch",
+                                config={"displayModeBar": False},
+                                key=f"technical_audio_plot_{index}",
+                            )
+                            st.audio(signal, sample_rate=sample_rate, format="audio/wav")
+            debug = result_state["debug"]
+            st.caption(
+                f"Processed at {debug.processing_rate} Hz "
+                f"({debug.selection_mode}; input {debug.input_rate} Hz; "
+                f"response to {debug.max_frequency:.1f} Hz)."
             )
 
 
@@ -1588,9 +1736,9 @@ def load_requested_audio(audio_request: dict[str, object]) -> tuple[np.ndarray, 
 
 
 def build_level_deltas(signals: dict[str, np.ndarray]) -> dict[str, float]:
-    if "Original" not in signals:
+    if ORIGINAL_AUDIO_LABEL not in signals:
         raise ValueError("An Original reference track is required.")
-    original_level = audio_level_db(signals["Original"])
+    original_level = audio_level_db(signals[ORIGINAL_AUDIO_LABEL])
     return {
         label: float(audio_level_db(signal) - original_level)
         for label, signal in signals.items()
@@ -1606,23 +1754,45 @@ def describe_level_delta(delta_db: float) -> str:
 
 
 def build_listening_summary(level_deltas: dict[str, float]) -> str:
-    analytical_label = "A4 panel — analytical simulation"
-    fem_label = "A4 panel — FEM simulation"
     statements: list[str] = []
-    if analytical_label in level_deltas:
+    if BARE_PANEL_AUDIO_LABEL in level_deltas:
         statements.append(
-            "The A4 analytical version is "
-            f"{describe_level_delta(level_deltas[analytical_label])}."
+            "The bare A4 panel is "
+            f"{describe_level_delta(level_deltas[BARE_PANEL_AUDIO_LABEL])}."
         )
-    if fem_label in level_deltas:
+    if ANALYTICAL_PANEL_AUDIO_LABEL in level_deltas:
+        statements.append(
+            "With local resonators, the A4 analytical version is "
+            f"{describe_level_delta(level_deltas[ANALYTICAL_PANEL_AUDIO_LABEL])}."
+        )
+    if FEM_PANEL_AUDIO_LABEL in level_deltas:
         statements.append(
             "The FEM version is "
-            f"{describe_level_delta(level_deltas[fem_label])}."
+            f"{describe_level_delta(level_deltas[FEM_PANEL_AUDIO_LABEL])}."
         )
     else:
         statements.append("A matching FEM result is not available for this target frequency.")
     statements.append("Switch versions while playback continues to compare the same moment.")
     return " ".join(statements)
+
+
+def build_diagnostic_signals(
+    primary_signals: dict[str, np.ndarray],
+    infinite_signal: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Return the four tracks used by the original technical comparison."""
+
+    diagnostics: dict[str, np.ndarray] = {}
+    if ORIGINAL_AUDIO_LABEL in primary_signals:
+        diagnostics[ORIGINAL_AUDIO_LABEL] = primary_signals[ORIGINAL_AUDIO_LABEL]
+    diagnostics[INFINITE_PANEL_AUDIO_LABEL] = np.asarray(
+        infinite_signal,
+        dtype=np.float64,
+    )
+    for label in (ANALYTICAL_PANEL_AUDIO_LABEL, FEM_PANEL_AUDIO_LABEL):
+        if label in primary_signals:
+            diagnostics[label] = primary_signals[label]
+    return diagnostics
 
 
 def interpolate_stl_at_frequency(
@@ -1648,6 +1818,7 @@ def interpolate_stl_at_frequency(
 def render_evidence_section(
     infinite,
     finite_results: dict[str, object],
+    bare_results: dict[str, object],
     resonance_hz: float,
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]],
     cache_error: str | None = None,
@@ -1659,8 +1830,9 @@ def render_evidence_section(
             <h2>Why do the simulations sound different?</h2>
             <p class="mv-evidence-copy">
                 Each line predicts how much sound the panel stops at each frequency. Higher values mean
-                less modeled sound passes through. The analytical model is quick and simplified; FEM
-                resolves the panel numerically, so the two methods do not produce exactly the same curve.
+                less modeled sound passes through. The bare panel provides a baseline. The resonant
+                analytical model is quick and simplified; FEM resolves the panel numerically, so the
+                two resonant methods do not produce exactly the same curve.
             </p>
         </div>
         """,
@@ -1670,6 +1842,9 @@ def render_evidence_section(
     finite_result = finite_results.get(DEMO_WINDOW_NAME)
     if finite_result is None and finite_results:
         finite_result = next(iter(finite_results.values()))
+    bare_result = bare_results.get(DEMO_WINDOW_NAME)
+    if bare_result is None and bare_results:
+        bare_result = next(iter(bare_results.values()))
     analytical_value = (
         interpolate_stl_at_frequency(
             finite_result.freqs_hz,
@@ -1692,6 +1867,17 @@ def render_evidence_section(
     )
 
     snapshot_lines = [f"- **Selected target:** {resonance_hz:.0f} Hz"]
+    bare_value = (
+        interpolate_stl_at_frequency(
+            bare_result.freqs_hz,
+            bare_result.stl_db,
+            resonance_hz,
+        )
+        if bare_result is not None
+        else None
+    )
+    if bare_value is not None:
+        snapshot_lines.append(f"- **Bare A4 prediction at the target:** {bare_value:.1f} dB")
     if analytical_value is not None:
         snapshot_lines.append(f"- **A4 analytical prediction at the target:** {analytical_value:.1f} dB")
     if fem_value is not None:
@@ -1713,6 +1899,7 @@ def render_evidence_section(
             fem_lrm_curves,
             f_min_hz=DEFAULT_F_MIN_HZ,
             f_max_hz=DEFAULT_F_MAX_HZ,
+            bare_results=bare_results,
         ),
         width="stretch",
         config={"displayModeBar": False, "scrollZoom": False},
@@ -1721,6 +1908,34 @@ def render_evidence_section(
     st.caption(
         "Sound transmission loss is a model output in decibels. It should not be read as the "
         "sound level a listener would measure in a specific room."
+    )
+
+    st.subheader("What your ears may notice")
+    sharpness_col, tonality_col = st.columns(2, gap="large")
+    with sharpness_col:
+        st.markdown(
+            """
+            **Sharpness — listen for brightness or hiss.**
+
+            Sharpness describes the perceived balance of the spectrum, giving more weight to
+            high-frequency loudness. A version that retains relatively more upper-frequency content
+            may sound brighter or sharper; one that suppresses it may sound softer or duller.
+            """
+        )
+    with tonality_col:
+        st.markdown(
+            """
+            **Tonality — listen for a hum, whine, or narrow pitch standing out.**
+
+            Tonality concerns how audible a tonal component is relative to the surrounding noise.
+            Attenuating an existing tone can make it less prominent, while reducing nearby frequencies
+            more strongly can make a remaining tone stand out.
+            """
+        )
+    st.caption(
+        "These are listening cues, not calculated psychoacoustic scores. The demo does not compute "
+        "standardized sharpness or tonality, and the impression depends on the recording, playback "
+        "level, headphones, and listener."
     )
 
     with st.expander("Model assumptions and technical details", expanded=False):
@@ -1732,10 +1947,11 @@ def render_evidence_section(
             - **Resonator mass ratio:** {FIXED_MASS_RATIO * 100:.0f}%
             - **Resonator loss factor:** {FIXED_RESONATOR_LOSS_FACTOR:.2f}
             - **Incidence model:** diffuse-field average
+            - **Bare curve:** finite A4 host panel with no local resonators
             - **Analytical curves:** infinite-panel reference plus a finite A4 correction
             - **FEM curve:** cached SOL 108 finite-element result for the selected tuning
 
-            Both listening versions apply the modeled transmission response to the same source recording.
+            Every processed listening version applies its modeled transmission response to the same source recording.
             They are simulations and have not been level-calibrated to a particular loudspeaker, room, or listener.
             """
         )
@@ -1822,7 +2038,7 @@ def main() -> None:
     values.pop("show_fem_lrm", False)
     try:
         with st.spinner("Updating the panel model…"):
-            infinite, finite_results = compute_curves(**values)
+            infinite, finite_results, bare_results = compute_curves(**values)
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -1844,13 +2060,21 @@ def main() -> None:
     render_auralization(
         infinite,
         finite_results,
-        build_filter_signature(values, infinite, finite_results, fem_overlay_curves),
+        bare_results,
+        build_filter_signature(
+            values,
+            infinite,
+            finite_results,
+            bare_results,
+            fem_overlay_curves,
+        ),
         audio_request,
         fem_overlay_curves,
     )
     render_evidence_section(
         infinite,
         finite_results,
+        bare_results,
         float(values["resonance_hz"]),
         fem_overlay_curves,
         cache_error,

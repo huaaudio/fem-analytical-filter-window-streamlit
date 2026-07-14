@@ -20,9 +20,10 @@ def _decode_pcm16(data_uri: str) -> tuple[wave.Wave_read, np.ndarray]:
 
 
 def test_payload_preserves_public_track_order_and_encodes_pcm16_wav() -> None:
-    original, analytical, fem = PRIMARY_AUDIO_LABELS
+    original, bare, analytical, fem = PRIMARY_AUDIO_LABELS
     signals = {
         original: np.array([2.0, -2.0, 1.0, -1.0]),
+        bare: np.array([1.5, -1.5, 0.75, -0.75]),
         analytical: np.array([1.0, -1.0, 0.5, -0.5]),
         fem: np.array([0.5, -0.5, 0.25, -0.25]),
     }
@@ -30,17 +31,19 @@ def test_payload_preserves_public_track_order_and_encodes_pcm16_wav() -> None:
     payload = build_audio_comparison_payload(
         signals,
         8_000,
-        level_deltas_db={original: 0.0, analytical: -6.0, fem: -12.0},
+        level_deltas_db={original: 0.0, bare: -2.5, analytical: -6.0, fem: -12.0},
     )
 
     assert payload["sampleRate"] == 8_000
     assert [track["label"] for track in payload["tracks"]] == [
         original,
+        bare,
         analytical,
         fem,
     ]
     assert [track["kind"] for track in payload["tracks"]] == [
         "original",
+        "bare",
         "analytical",
         "fem",
     ]
@@ -55,10 +58,11 @@ def test_payload_preserves_public_track_order_and_encodes_pcm16_wav() -> None:
         decoded.append(samples)
         wav_file.close()
 
-    # One shared peak normalization preserves the intended 1 : 0.5 : 0.25 ratios.
+    # One shared peak normalization preserves the intended 1 : 0.75 : 0.5 : 0.25 ratios.
     assert np.max(np.abs(decoded[0])) == 32_767
-    assert np.max(np.abs(decoded[1])) == pytest.approx(16_384, abs=1)
-    assert np.max(np.abs(decoded[2])) == pytest.approx(8_192, abs=1)
+    assert np.max(np.abs(decoded[1])) == pytest.approx(24_575, abs=1)
+    assert np.max(np.abs(decoded[2])) == pytest.approx(16_384, abs=1)
+    assert np.max(np.abs(decoded[3])) == pytest.approx(8_192, abs=1)
 
 
 def test_payload_sanitizes_nonfinite_samples_before_encoding() -> None:

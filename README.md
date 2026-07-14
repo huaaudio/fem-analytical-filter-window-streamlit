@@ -1,6 +1,6 @@
 # METAVISION acoustic panel listening demo
 
-A public Streamlit demo for hearing how analytical and finite-element (FEM) simulations predict that an A4-sized locally resonant metamaterial panel changes sound. The guided experience begins with sample audio, a target-frequency control, a plain-language result, and optional technical detail. Both processed outputs are simulations, not physical measurements; headphones are recommended.
+A public Streamlit demo for hearing how a bare A4 panel compares with analytical and finite-element (FEM) simulations of the same panel with local resonators. The guided experience begins with sample audio, a target-frequency control, a plain-language result, and optional technical detail. All processed outputs are simulations, not physical measurements; headphones are recommended.
 
 ## Run locally
 

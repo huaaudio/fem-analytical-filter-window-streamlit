@@ -83,6 +83,7 @@ _COMPONENT_CSS = r"""
 
 .audio-compare {
   --player-original: #364152;
+  --player-bare: #52616f;
   --player-analytical: #007c83;
   --player-fem: #b84e32;
   --player-infinite: #7a8793;
@@ -174,6 +175,10 @@ _COMPONENT_CSS = r"""
 
 .audio-compare__version[data-kind="original"] {
   --track-accent: var(--player-original);
+}
+
+.audio-compare__version[data-kind="bare"] {
+  --track-accent: var(--player-bare);
 }
 
 .audio-compare__version[data-kind="analytical"] {
@@ -468,6 +473,7 @@ export default function(component) {
   const accentFor = (kind) => {
     const property = {
       original: "--player-original",
+      bare: "--player-bare",
       analytical: "--player-analytical",
       fem: "--player-fem",
       infinite: "--player-infinite",
@@ -746,6 +752,7 @@ else:  # pragma: no cover - version dependent
 
 _DEFAULT_DESCRIPTIONS = {
     "original": "Unprocessed source audio",
+    "bare": "A4-sized host panel without local resonators",
     "analytical": "A4-sized panel · analytical simulation",
     "fem": "A4-sized panel · FEM simulation",
     "infinite": "Idealized infinite-panel simulation",
@@ -759,6 +766,8 @@ def _track_kind(label: str) -> str:
     normalized = label.casefold()
     if "original" in normalized or normalized.strip() == "input":
         return "original"
+    if "bare" in normalized:
+        return "bare"
     if "infinite" in normalized:
         return "infinite"
     if "fem" in normalized or "finite element" in normalized:
