@@ -33,7 +33,7 @@ def test_general_audience_defaults_and_primary_cta() -> None:
     assert cta.disabled is False
 
     visible_copy = " ".join(element.value for element in app.markdown)
-    assert "Hear a Metamaterial Panel Change Sound" in visible_copy
+    assert "Hear How a Metamaterial Panel Changes Sound" in visible_copy
     assert "Create a sound comparison" in visible_copy
     assert "Sharpness: listen for brightness or hiss" in visible_copy
     assert "Tonality: listen for a hum, whine, or distinct pitch" in visible_copy

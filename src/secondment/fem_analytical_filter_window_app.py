@@ -69,6 +69,7 @@ COLOR_INFINITE = "#7A8793"
 COLOR_INK = "#102A43"
 COLOR_MUTED = "#52616F"
 COLOR_GRID = "#D8E2EA"
+COLOR_BACKGROUND = "#FAFBFC"
 DEFAULT_AUDIO_SAMPLE_RATE = 48000
 PROJECT_ROOT = SOURCE_ROOT.parent
 FIXED_MASS_RATIO = 0.20
@@ -951,7 +952,7 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
             x=time_x,
             y=time_y,
             mode="lines",
-            line={"color": "#7dd3fc", "width": 1.1},
+            line={"color": color, "width": 1.1},
             hovertemplate="t=%{x:.2f}s<br>amp=%{y:.2f}<extra></extra>",
         ),
         row=1,
@@ -965,9 +966,9 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
             zmin=-80.0,
             zmax=0.0,
             colorscale=[
-                [0.0, "#020617"],
-                [0.18, "#111827"],
-                [0.35, "#312e81"],
+                [0.0, COLOR_BACKGROUND],
+                [0.18, "#EDF2F5"],
+                [0.35, "#C9DDE1"],
                 [0.52, "#7e22ce"],
                 [0.68, "#db2777"],
                 [0.84, "#f97316"],
@@ -982,15 +983,15 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
     fig.update_layout(
         height=220,
         margin={"l": 10, "r": 10, "t": 6, "b": 34},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#101828",
+        paper_bgcolor=COLOR_BACKGROUND,
+        plot_bgcolor=COLOR_BACKGROUND,
         showlegend=False,
-        font={"color": "#cbd5e1", "size": 10},
+        font={"color": COLOR_MUTED, "size": 10},
     )
     fig.update_xaxes(
         title_text="Time [s]",
         showgrid=True,
-        gridcolor="rgba(148, 163, 184, 0.18)",
+        gridcolor=COLOR_GRID,
         zeroline=False,
         row=1,
         col=1,
@@ -1001,7 +1002,7 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
         title_standoff=4,
         range=[float(time_x[0]), float(time_x[-1]) if time_x.size else 0.0],
         showgrid=True,
-        gridcolor="rgba(148, 163, 184, 0.18)",
+        gridcolor=COLOR_GRID,
         zeroline=False,
         row=2,
         col=1,
@@ -1443,9 +1444,9 @@ def render_hero() -> None:
     st.markdown(
         """
         <section class="mv-hero" aria-labelledby="mv-page-title">
-            <h1 id="mv-page-title">Hear a Metamaterial Panel Change Sound</h1>
+            <h1 id="mv-page-title">Hear How a Metamaterial Panel Changes Sound</h1>
             <p class="mv-hero-copy">
-                Choose a sound, tune the panel, and hear how bare and metamaterial A4 panels change it.
+                Choose a sound, tune the panel, and hear how bare or metamaterial A4-sized panels change it.
                 All results are simulations.
             </p>
             <p class="mv-hero-note">Headphones recommended. About one minute.</p>
@@ -1823,11 +1824,11 @@ def build_listening_summary(level_deltas: dict[str, float]) -> str:
         )
     if FEM_PANEL_AUDIO_LABEL in level_deltas:
         statements.append(
-            "The FEM version is "
+            "The Finite Element Model (FEM) version is "
             f"{describe_level_delta(level_deltas[FEM_PANEL_AUDIO_LABEL])}."
         )
     else:
-        statements.append("A matching FEM result is not available for this target frequency.")
+        statements.append("A matching Finite Element Model (FEM) result is not available for this target frequency.")
     statements.append("Switch versions while playback continues to compare the same moment.")
     return " ".join(statements)
 
@@ -2250,7 +2251,7 @@ def render_project_info_section() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="Hear How a metamaterial panel change sound | METAVISION",
+        page_title="Hear how a metamaterial panel change sound | METAVISION",
         page_icon=PROJECT_ROOT / "archive/metavision.png",
         layout="wide",
         initial_sidebar_state="collapsed",

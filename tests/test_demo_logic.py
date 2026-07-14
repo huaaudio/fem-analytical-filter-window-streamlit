@@ -17,6 +17,7 @@ from secondment.fem_analytical_filter_window_app import (
     ORIGINAL_AUDIO_LABEL,
     PRIMARY_AUDIO_LABELS,
     UPLOAD_AUDIO_LABEL,
+    build_audio_card_figure,
     build_demo_values,
     build_diagnostic_signals,
     build_level_deltas,
@@ -81,7 +82,7 @@ def test_level_deltas_and_plain_language_summary() -> None:
     assert "2.5 dB quieter" in summary
     assert "analytical version" in summary
     assert "6.0 dB quieter" in summary
-    assert "FEM version" in summary
+    assert "Finite Element Model (FEM) version" in summary
     assert "12.0 dB quieter" in summary
     assert "playback continues" in summary
 
@@ -89,7 +90,7 @@ def test_level_deltas_and_plain_language_summary() -> None:
 def test_summary_explains_when_fem_result_is_missing() -> None:
     original, bare, analytical, _ = PRIMARY_AUDIO_LABELS
     summary = build_listening_summary({original: 0.0, bare: -1.0, analytical: -3.2})
-    assert "matching FEM result is not available" in summary
+    assert "matching Finite Element Model (FEM) result is not available" in summary
 
 
 def test_level_deltas_require_an_explicit_original_reference() -> None:
@@ -108,6 +109,22 @@ def test_diagnostic_tracks_preserve_original_four_track_order() -> None:
     assert tuple(diagnostics) == DIAGNOSTIC_AUDIO_LABELS
     assert BARE_PANEL_AUDIO_LABEL not in diagnostics
     assert np.array_equal(diagnostics[INFINITE_PANEL_AUDIO_LABEL], np.full(4, 0.5))
+
+
+def test_audio_card_uses_the_light_app_background() -> None:
+    sample_rate = 8_000
+    time = np.arange(sample_rate, dtype=np.float64) / sample_rate
+    figure = build_audio_card_figure(
+        np.sin(2.0 * np.pi * 440.0 * time),
+        sample_rate,
+        "#007C83",
+    )
+
+    assert figure.layout.paper_bgcolor == "#FAFBFC"
+    assert figure.layout.plot_bgcolor == "#FAFBFC"
+    assert figure.layout.font.color == "#52616F"
+    assert figure.data[0].line.color == "#007C83"
+    assert figure.data[1].colorscale[0][1] == "#FAFBFC"
 
 
 def test_compute_curves_returns_distinct_bare_a4_baseline() -> None:
