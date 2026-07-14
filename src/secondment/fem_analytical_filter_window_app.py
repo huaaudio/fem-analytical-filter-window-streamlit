@@ -43,6 +43,11 @@ from secondment.numerical_store import (
     get_numerical_store_path,
     load_numerical_result,
 )
+from secondment.psychoacoustic_metrics import (
+    NativePsychoacousticError,
+    TrackPsychoacoustics,
+    compute_psychoacoustic_comparison,
+)
 from secondment.response_store import ResponseStore
 from secondment.fem_prerun.dat_writer import hash_base_dat
 from secondment.fem_prerun.config import load_config as load_fem_prerun_config
@@ -61,7 +66,6 @@ WINDOW_COLORS = {
 COLOR_ANALYTICAL = "#007C83"
 COLOR_FEM = "#B84E32"
 COLOR_INFINITE = "#7A8793"
-COLOR_BARE = "#52616F"
 COLOR_INK = "#102A43"
 COLOR_MUTED = "#52616F"
 COLOR_GRID = "#D8E2EA"
@@ -133,8 +137,12 @@ REFERENCE_ITEMS = (
         "url": "https://www.dinmedia.de/en/standard/din-45692/117635111",
     },
     {
-        "label": "ISO/TS 20065:2022. Acoustics — Objective method for assessing the audibility of tones in noise — Engineering method.",
+        "label": "ISO/TS 20065:2022. Acoustics: Objective method for assessing the audibility of tones in noise, engineering method.",
         "url": "https://www.iso.org/standard/81518.html",
+    },
+    {
+        "label": "Aures, W. (1985). Berechnungsverfahren für den sensorischen Wohlklang beliebiger Schallsignale. Acustica, 59, 130-141.",
+        "url": "https://terhardt.userweb.mwn.de/ter/ref/Aures1985b.html",
     },
 )
 
@@ -144,17 +152,17 @@ _FEM_LRM_FILENAME_RE = re.compile(r"^(A\d)_wall_lrm\.csv$", re.IGNORECASE)
 FEM_CACHE_CURVE_KEY = "Cache"
 UPLOAD_AUDIO_LABEL = "Use your own WAV"
 RECORDED_AUDIO_CANDIDATES = (
-    ("Aircraft cabin — works well at 420 Hz", "archive/Recordings/SkyExpress_Flight.wav"),
-    ("Hair dryer — works well at 850 Hz", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
-    ("Idling motorbike — works well at 680 Hz", "archive/Recordings/DATASEC/motorbike idling-0001.wav"),
-    ("Vacuum cleaner — works well at 770 Hz", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
+    ("Aircraft cabin (works well at 420 Hz)", "archive/Recordings/SkyExpress_Flight.wav"),
+    ("Hair dryer (works well at 850 Hz)", "archive/Recordings/DATASEC/hairdryer-0004.wav"),
+    ("Grinder (works well at 560 Hz)", "archive/Recordings/DATASEC/grinder-0008.wav"),
+    ("Vacuum cleaner (works well at 770 Hz)", "archive/Recordings/DATASEC/vacuum cleaner-0001.wav"),
 )
 METAVISION_DEMOS_URL = "https://www.heu-metavision.eu/dissemination/demos/"
 ORIGINAL_AUDIO_LABEL = "Original"
-BARE_PANEL_AUDIO_LABEL = "Bare A4 panel — analytical simulation"
-ANALYTICAL_PANEL_AUDIO_LABEL = "A4 panel — analytical simulation"
-FEM_PANEL_AUDIO_LABEL = "A4 panel — FEM simulation"
-INFINITE_PANEL_AUDIO_LABEL = "Ideal infinite panel — analytical simulation"
+BARE_PANEL_AUDIO_LABEL = "Bare panel: analytical"
+ANALYTICAL_PANEL_AUDIO_LABEL = "Metamaterial: analytical"
+FEM_PANEL_AUDIO_LABEL = "Metamaterial: FEM simulation"
+INFINITE_PANEL_AUDIO_LABEL = "Ideal infinite panel: analytical simulation"
 PRIMARY_AUDIO_LABELS = (
     ORIGINAL_AUDIO_LABEL,
     BARE_PANEL_AUDIO_LABEL,
@@ -167,6 +175,12 @@ DIAGNOSTIC_AUDIO_LABELS = (
     ANALYTICAL_PANEL_AUDIO_LABEL,
     FEM_PANEL_AUDIO_LABEL,
 )
+PSYCHOACOUSTIC_DISPLAY_LABELS = {
+    ORIGINAL_AUDIO_LABEL: "Original",
+    BARE_PANEL_AUDIO_LABEL: "Bare panel<br>(analytical)",
+    ANALYTICAL_PANEL_AUDIO_LABEL: "Metamaterial<br>(analytical)",
+    FEM_PANEL_AUDIO_LABEL: "Metamaterial<br>(FEM)",
+}
 
 
 def read_fem_stl_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -427,7 +441,7 @@ def discover_recorded_audio_files() -> dict[str, Path]:
 def fem_curve_display_label(key: str) -> str:
     if key == FEM_CACHE_CURVE_KEY:
         return FEM_PANEL_AUDIO_LABEL
-    return f"FEM simulation — {key} panel"
+    return f"FEM simulation: {key} panel"
 
 
 def fem_curve_color(key: str) -> str:
@@ -644,29 +658,15 @@ def build_plot(
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     f_min_hz: float | None = None,
     f_max_hz: float | None = None,
-    bare_results: dict[str, object] | None = None,
 ) -> go.Figure:
     fig = go.Figure()
     freq_arrays = [np.asarray(infinite.freqs_hz, dtype=np.float64)]
     stl_arrays = [np.asarray(infinite.stl_db, dtype=np.float64)]
-    for paper_name, result in (bare_results or {}).items():
-        freq_arrays.append(np.asarray(result.freqs_hz, dtype=np.float64))
-        stl_arrays.append(np.asarray(result.stl_db, dtype=np.float64))
-        fig.add_trace(
-            go.Scatter(
-                x=result.freqs_hz,
-                y=result.stl_db,
-                name=f"Bare {paper_name} panel — analytical",
-                mode="lines",
-                line={"color": COLOR_BARE, "width": 2.25},
-                hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>Bare A4 analytical</extra>",
-            )
-        )
     fig.add_trace(
         go.Scatter(
             x=infinite.freqs_hz,
             y=infinite.stl_db,
-            name="Ideal infinite panel — analytical",
+            name="Ideal infinite panel: analytical",
             mode="lines",
             line={"color": COLOR_INFINITE, "width": 2.5, "dash": "dash"},
             hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>Infinite analytical</extra>",
@@ -679,10 +679,13 @@ def build_plot(
             go.Scatter(
                 x=result.freqs_hz,
                 y=result.stl_db,
-                name=f"{paper_name} panel — analytical",
+                name=f"{paper_name} metamaterial: analytical",
                 mode="lines",
                 line={"color": COLOR_ANALYTICAL, "width": 3},
-                hovertemplate="%{x:.0f} Hz<br>%{y:.1f} dB<extra>A4 analytical</extra>",
+                hovertemplate=(
+                    "%{x:.0f} Hz<br>%{y:.1f} dB"
+                    f"<extra>{paper_name} metamaterial analytical</extra>"
+                ),
             )
         )
     for paper_name, (fem_freqs, fem_stl) in (fem_lrm_curves or {}).items():
@@ -756,7 +759,7 @@ def build_plot(
             "zeroline": False,
         },
         yaxis={
-            "title": "Sound transmission loss (dB) — higher is better",
+            "title": "Transmission loss (dB)",
             "range": [y0, y1],
             "showgrid": True,
             "gridcolor": COLOR_GRID,
@@ -1021,13 +1024,13 @@ def build_audio_card_figure(signal: np.ndarray, sample_rate: int, color: str) ->
 def build_audio_output_label(paper_name: str) -> str:
     if paper_name == DEMO_WINDOW_NAME:
         return ANALYTICAL_PANEL_AUDIO_LABEL
-    return f"{paper_window_label(paper_name)} — analytical simulation"
+    return f"{paper_window_label(paper_name)}: analytical simulation"
 
 
 def build_bare_audio_output_label(paper_name: str) -> str:
     if paper_name == DEMO_WINDOW_NAME:
         return BARE_PANEL_AUDIO_LABEL
-    return f"Bare {paper_window_label(paper_name)} — analytical simulation"
+    return f"Bare {paper_window_label(paper_name)}: analytical simulation"
 
 
 def fem_stl_to_transmission_amplitude(stl_db: np.ndarray) -> np.ndarray:
@@ -1168,7 +1171,8 @@ def render_demo_styles() -> None:
             --mv-ink: #102A43;
             --mv-muted: #52616F;
             --mv-border: #D8E2EA;
-            --mv-surface: #F4F7FA;
+            --mv-surface: #F1F5F7;
+            --mv-panel: #FCFDFD;
             --mv-analytical: #007C83;
             --mv-fem: #B84E32;
         }
@@ -1179,6 +1183,20 @@ def render_demo_styles() -> None:
             padding-top: 4.5rem;
             padding-bottom: 3.5rem;
             max-width: 1120px;
+        }
+        .st-key-listening_stage {
+            background: var(--mv-panel);
+            box-shadow: 0 18px 50px rgba(16, 42, 67, 0.06);
+        }
+        div.stButton > button {
+            transition: transform 120ms ease, background-color 160ms ease;
+        }
+        div.stButton > button:active {
+            transform: translateY(1px);
+        }
+        div.stButton > button:focus-visible {
+            outline: 3px solid rgba(0, 124, 131, 0.25);
+            outline-offset: 2px;
         }
         .mv-brand-rail {
             min-height: 3.75rem;
@@ -1219,8 +1237,8 @@ def render_demo_styles() -> None:
             text-underline-offset: 0.2rem;
         }
         .mv-hero {
-            max-width: 760px;
-            padding: 2.75rem 0 2.5rem;
+            max-width: 720px;
+            padding: 2.5rem 0 2.25rem;
         }
         .mv-hero h1 {
             color: var(--mv-ink);
@@ -1272,13 +1290,31 @@ def render_demo_styles() -> None:
             line-height: 1.6;
             margin: 0;
         }
-        .mv-model-snapshot {
-            color: var(--mv-muted);
-            line-height: 1.65;
-            margin: 0.5rem 0 1rem;
+        .mv-model-facts {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            border-top: 1px solid var(--mv-border);
+            border-bottom: 1px solid var(--mv-border);
+            margin: 0.25rem 0 1.5rem;
         }
-        .mv-model-snapshot strong {
+        .mv-model-fact {
+            padding: 0.85rem 1rem;
+            border-left: 1px solid var(--mv-border);
+        }
+        .mv-model-fact:first-child {
+            border-left: 0;
+        }
+        .mv-model-fact span {
+            display: block;
+            color: var(--mv-muted);
+            font-size: 0.78rem;
+            line-height: 1.35;
+            margin-bottom: 0.2rem;
+        }
+        .mv-model-fact strong {
             color: var(--mv-ink);
+            font-size: 1.08rem;
+            font-variant-numeric: tabular-nums;
         }
         .audio-card-title {
             color: var(--mv-ink);
@@ -1311,11 +1347,7 @@ def render_demo_styles() -> None:
             width: auto;
             height: 44px;
             object-fit: contain;
-            margin: 0 auto 0.45rem;
-        }
-        .mv-partner span {
-            color: var(--mv-muted);
-            font-size: 0.82rem;
+            margin: 0 auto;
         }
         .mv-footer-note {
             color: var(--mv-muted);
@@ -1356,6 +1388,18 @@ def render_demo_styles() -> None:
             .mv-result-lede {
                 margin-top: 2rem;
             }
+            .mv-model-facts {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            .mv-model-fact {
+                padding: 0.75rem 0.65rem;
+            }
+            .mv-model-fact:nth-child(odd) {
+                border-left: 0;
+            }
+            .mv-model-fact:nth-child(n + 3) {
+                border-top: 1px solid var(--mv-border);
+            }
             .mv-partner-strip {
                 gap: 1.5rem;
             }
@@ -1377,7 +1421,7 @@ def render_demo_styles() -> None:
 def render_brand_rail() -> None:
     logo_uri = resource_data_uri("archive/metavision.png")
     logo_markup = (
-        f'<img src="{logo_uri}" alt="METAVISION — Metamaterials for Vibration and Sound Reduction">'
+        f'<img src="{logo_uri}" alt="METAVISION: Metamaterials for Vibration and Sound Reduction">'
         if logo_uri
         else "<strong>METAVISION</strong>"
     )
@@ -1399,13 +1443,12 @@ def render_hero() -> None:
     st.markdown(
         """
         <section class="mv-hero" aria-labelledby="mv-page-title">
-            <h1 id="mv-page-title">Hear how a metamaterial panel changes sound</h1>
+            <h1 id="mv-page-title">Hear a Metamaterial Panel Change Sound</h1>
             <p class="mv-hero-copy">
-                Choose a sound and target frequency, then compare a bare A4 panel with analytical
-                and FEM predictions for the same panel with local resonators. Every result is a
-                simulation, not a physical measurement.
+                Choose a sound, tune the panel, and hear how bare and metamaterial A4 panels change it.
+                All results are simulations.
             </p>
-            <p class="mv-hero-note">Headphones recommended · About one minute</p>
+            <p class="mv-hero-note">Headphones recommended. About one minute.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -1441,9 +1484,9 @@ def render_demo_controls(
     with st.container(border=True, key="listening_stage"):
         st.markdown(
             """
-            <h2 class="mv-stage-title">Create your listening comparison</h2>
+            <h2 class="mv-stage-title">Create a sound comparison</h2>
             <p class="mv-stage-copy">
-                Start with an included recording, then tune the frequency the panel is designed to target.
+                Choose a recording, then set the panel's target frequency.
             </p>
             """,
             unsafe_allow_html=True,
@@ -1451,21 +1494,21 @@ def render_demo_controls(
         source_col, target_col = st.columns(2, gap="large")
         with source_col:
             source_type = st.selectbox(
-                "1. Pick a sound",
+                "Choose a sound",
                 options=audio_options,
                 index=0,
                 key="audio_source",
                 help="Included recordings are ready to compare. Choose the upload option only if you want to use your own WAV file.",
             )
             if source_type != UPLOAD_AUDIO_LABEL:
-                st.caption("A curated eight-second excerpt will be used.")
+                st.caption("A curated 8-second excerpt will be used.")
 
         with target_col:
             cached_frequencies = cached_resonance_frequencies(cache_points)
             default_resonance = preferred_resonance_frequency(cached_frequencies)
             if cached_frequencies:
                 resonance_hz = st.select_slider(
-                    "2. Tune the panel",
+                    "Target frequency",
                     options=cached_frequencies,
                     value=default_resonance,
                     format_func=lambda value: f"{float(value):.0f} Hz",
@@ -1474,7 +1517,7 @@ def render_demo_controls(
                 )
             else:
                 resonance_hz = st.slider(
-                    "2. Tune the panel",
+                    "Target frequency",
                     100.0,
                     2000.0,
                     float(default_resonance),
@@ -1586,10 +1629,23 @@ def render_auralization(
                 raise ValueError("The processed audio contains no usable samples.")
 
             level_deltas = build_level_deltas(primary_signals)
+            psychoacoustic_metrics: dict[str, TrackPsychoacoustics] = {}
+            psychoacoustic_error: str | None = None
+            try:
+                psychoacoustic_metrics = compute_psychoacoustic_comparison(
+                    primary_signals,
+                    int(infinite_audio.sample_rate),
+                )
+            except (NativePsychoacousticError, OSError, ValueError, TypeError):
+                psychoacoustic_error = (
+                    "Sharpness and tonality could not be calculated for this comparison."
+                )
             st.session_state["window_auralization"] = {
                 "primary_signals": primary_signals,
                 "infinite_signal": infinite_signal,
                 "level_deltas": level_deltas,
+                "psychoacoustic_metrics": psychoacoustic_metrics,
+                "psychoacoustic_error": psychoacoustic_error,
                 "sample_rate": int(infinite_audio.sample_rate),
                 "debug": infinite_audio.sample_rate_debug,
                 "result_signature": result_signature,
@@ -1622,12 +1678,12 @@ def render_auralization(
     sample_rate = int(result_state["sample_rate"])
     descriptions = {
         ORIGINAL_AUDIO_LABEL: "The unprocessed recording used as the listening reference.",
-        BARE_PANEL_AUDIO_LABEL: "The same A4 host panel without local resonators.",
+        BARE_PANEL_AUDIO_LABEL: "The panel itself without LRM.",
         ANALYTICAL_PANEL_AUDIO_LABEL: (
-            "An analytical prediction for the A4 panel with local resonators."
+            "An analytical prediction for the A4 panel with LRM."
         ),
         FEM_PANEL_AUDIO_LABEL: (
-            "A finite-element prediction for the same resonant panel and tuning."
+            "A finite-element prediction for the same metamaterial panel and tuning."
         ),
     }
     render_audio_comparison(
@@ -1757,12 +1813,12 @@ def build_listening_summary(level_deltas: dict[str, float]) -> str:
     statements: list[str] = []
     if BARE_PANEL_AUDIO_LABEL in level_deltas:
         statements.append(
-            "The bare A4 panel is "
+            "The bare panel is "
             f"{describe_level_delta(level_deltas[BARE_PANEL_AUDIO_LABEL])}."
         )
     if ANALYTICAL_PANEL_AUDIO_LABEL in level_deltas:
         statements.append(
-            "With local resonators, the A4 analytical version is "
+            "With local resonators, the analytical version is "
             f"{describe_level_delta(level_deltas[ANALYTICAL_PANEL_AUDIO_LABEL])}."
         )
     if FEM_PANEL_AUDIO_LABEL in level_deltas:
@@ -1815,10 +1871,179 @@ def interpolate_stl_at_frequency(
     return float(np.interp(float(target_hz), frequencies, values))
 
 
+def build_psychoacoustic_table(
+    metrics: dict[str, TrackPsychoacoustics],
+) -> pd.DataFrame:
+    """Build a stable, listening-order table of calculated sound-quality metrics."""
+
+    rows = []
+    for label in PRIMARY_AUDIO_LABELS:
+        result = metrics.get(label)
+        if result is None:
+            continue
+        rows.append(
+            {
+                "Listening version": label,
+                "Sharpness S₅ (acum)": result.sharpness_s5_acum,
+                "Tonality K₅ (t.u.)": result.tonality_k5_tu,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_psychoacoustic_figure(
+    metrics: dict[str, TrackPsychoacoustics],
+) -> go.Figure:
+    """Compare sharpness and tonality with separate, readable horizontal scales."""
+
+    ordered = [
+        (label, metrics[label])
+        for label in reversed(PRIMARY_AUDIO_LABELS)
+        if label in metrics
+    ]
+    labels = [PSYCHOACOUSTIC_DISPLAY_LABELS[label] for label, _ in ordered]
+    source_labels = [label for label, _ in ordered]
+    colors_by_label = {
+        ORIGINAL_AUDIO_LABEL: COLOR_INK,
+        BARE_PANEL_AUDIO_LABEL: COLOR_INFINITE,
+        ANALYTICAL_PANEL_AUDIO_LABEL: COLOR_ANALYTICAL,
+        FEM_PANEL_AUDIO_LABEL: COLOR_FEM,
+    }
+    colors = [colors_by_label[label] for label, _ in ordered]
+    sharpness = [result.sharpness_s5_acum for _, result in ordered]
+    tonality = [result.tonality_k5_tu for _, result in ordered]
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        vertical_spacing=0.29,
+        subplot_titles=(
+            "<b>Sharpness S₅</b><br><span style='font-size:11px'>"
+            "Higher can sound brighter or hissier (acum)</span>",
+            "<b>Tonality K₅</b><br><span style='font-size:11px'>"
+            "Higher means a tone stands out more (t.u.)</span>",
+        ),
+    )
+    fig.add_trace(
+        go.Bar(
+            x=sharpness,
+            y=labels,
+            orientation="h",
+            marker={"color": colors},
+            customdata=source_labels,
+            text=[f"{value:.3f}" for value in sharpness],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{customdata}<br>Sharpness: %{x:.3f} acum<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=tonality,
+            y=labels,
+            orientation="h",
+            marker={"color": colors},
+            customdata=source_labels,
+            text=[f"{value:.3f}" for value in tonality],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{customdata}<br>Tonality: %{x:.3f} t.u.<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    for row, values in ((1, sharpness), (2, tonality)):
+        axis_max = max(values, default=1.0)
+        fig.update_xaxes(
+            range=[0.0, axis_max * 1.2],
+            showgrid=True,
+            gridcolor=COLOR_GRID,
+            zeroline=False,
+            fixedrange=True,
+            tickfont={"size": 10, "color": COLOR_MUTED},
+            row=row,
+            col=1,
+        )
+        fig.update_yaxes(
+            fixedrange=True,
+            tickfont={"size": 11, "color": COLOR_INK},
+            row=row,
+            col=1,
+        )
+    fig.update_annotations(
+        x=0.0,
+        xanchor="left",
+        align="left",
+        font={"size": 14, "color": COLOR_INK},
+    )
+    fig.update_layout(
+        height=570,
+        margin={"l": 132, "r": 46, "t": 78, "b": 34},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": COLOR_MUTED, "size": 11},
+        showlegend=False,
+        hovermode="closest",
+        bargap=0.32,
+    )
+    return fig
+
+
+def build_model_snapshot_html(
+    resonance_hz: float,
+    analytical_value: float | None,
+    fem_value: float | None,
+    infinite_value: float | None,
+) -> str:
+    """Return a compact evidence strip for the selected target frequency."""
+
+    facts = [("Target frequency", f"{resonance_hz:.0f} Hz")]
+    if analytical_value is not None:
+        facts.append(("Metamaterial, analytical", f"{analytical_value:.1f} dB"))
+    if fem_value is not None:
+        facts.append(("Metamaterial, FEM", f"{fem_value:.1f} dB"))
+    if infinite_value is not None:
+        facts.append(("Infinite panel", f"{infinite_value:.1f} dB"))
+    cells = "".join(
+        f'<div class="mv-model-fact" role="listitem"><span>{label}</span>'
+        f"<strong>{value}</strong></div>"
+        for label, value in facts
+    )
+    return (
+        '<div class="mv-model-facts" role="list" '
+        f'aria-label="Model values at the selected target frequency">{cells}</div>'
+    )
+
+
+def build_psychoacoustic_takeaway(
+    metrics: dict[str, TrackPsychoacoustics],
+) -> str:
+    """Summarize the strongest sharpness and tonality sensations in plain language."""
+
+    ordered_metrics = [
+        (label, metrics[label]) for label in PRIMARY_AUDIO_LABELS if label in metrics
+    ]
+    if not ordered_metrics:
+        return ""
+    sharpest_label, _ = max(
+        ordered_metrics,
+        key=lambda item: item[1].sharpness_s5_acum,
+    )
+    most_tonal_label, _ = max(
+        ordered_metrics,
+        key=lambda item: item[1].tonality_k5_tu,
+    )
+    return (
+        f"Highest sharpness: **{sharpest_label}**. "
+        f"Highest tonality: **{most_tonal_label}**."
+    )
+
+
 def render_evidence_section(
     infinite,
     finite_results: dict[str, object],
-    bare_results: dict[str, object],
     resonance_hz: float,
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]],
     cache_error: str | None = None,
@@ -1829,10 +2054,9 @@ def render_evidence_section(
         <div>
             <h2>Why do the simulations sound different?</h2>
             <p class="mv-evidence-copy">
-                Each line predicts how much sound the panel stops at each frequency. Higher values mean
-                less modeled sound passes through. The bare panel provides a baseline. The resonant
-                analytical model is quick and simplified; FEM resolves the panel numerically, so the
-                two resonant methods do not produce exactly the same curve.
+                The chart predicts how much sound each model stops at every frequency. Higher values mean
+                less sound passes through. The analytical model is simplified; Finite Element Method (FEM)
+                resolves the panel numerically.
             </p>
         </div>
         """,
@@ -1842,9 +2066,6 @@ def render_evidence_section(
     finite_result = finite_results.get(DEMO_WINDOW_NAME)
     if finite_result is None and finite_results:
         finite_result = next(iter(finite_results.values()))
-    bare_result = bare_results.get(DEMO_WINDOW_NAME)
-    if bare_result is None and bare_results:
-        bare_result = next(iter(bare_results.values()))
     analytical_value = (
         interpolate_stl_at_frequency(
             finite_result.freqs_hz,
@@ -1866,25 +2087,14 @@ def render_evidence_section(
         else None
     )
 
-    snapshot_lines = [f"- **Selected target:** {resonance_hz:.0f} Hz"]
-    bare_value = (
-        interpolate_stl_at_frequency(
-            bare_result.freqs_hz,
-            bare_result.stl_db,
+    st.html(
+        build_model_snapshot_html(
             resonance_hz,
+            analytical_value,
+            fem_value,
+            infinite_value,
         )
-        if bare_result is not None
-        else None
     )
-    if bare_value is not None:
-        snapshot_lines.append(f"- **Bare A4 prediction at the target:** {bare_value:.1f} dB")
-    if analytical_value is not None:
-        snapshot_lines.append(f"- **A4 analytical prediction at the target:** {analytical_value:.1f} dB")
-    if fem_value is not None:
-        snapshot_lines.append(f"- **A4 FEM prediction at the target:** {fem_value:.1f} dB")
-    if infinite_value is not None:
-        snapshot_lines.append(f"- **Ideal infinite-panel prediction at the target:** {infinite_value:.1f} dB")
-    st.markdown("\n".join(snapshot_lines))
 
     if fem_curve is None:
         st.warning(
@@ -1899,7 +2109,6 @@ def render_evidence_section(
             fem_lrm_curves,
             f_min_hz=DEFAULT_F_MIN_HZ,
             f_max_hz=DEFAULT_F_MAX_HZ,
-            bare_results=bare_results,
         ),
         width="stretch",
         config={"displayModeBar": False, "scrollZoom": False},
@@ -1911,48 +2120,67 @@ def render_evidence_section(
     )
 
     st.subheader("What your ears may notice")
+    result_state = st.session_state.get("window_auralization") or {}
+    psychoacoustic_metrics = result_state.get("psychoacoustic_metrics") or {}
+    psychoacoustic_error = result_state.get("psychoacoustic_error")
+    if psychoacoustic_metrics:
+        st.markdown(
+            f"**At a glance:** {build_psychoacoustic_takeaway(psychoacoustic_metrics)}"
+        )
+        st.plotly_chart(
+            build_psychoacoustic_figure(psychoacoustic_metrics),
+            width="stretch",
+            config={"displayModeBar": False, "scrollZoom": False},
+            key="psychoacoustic_comparison_plot",
+        )
+        st.caption(
+            "Each panel has its own scale. Compare bars within sharpness or within tonality, not "
+            "across the two metrics. S₅ and K₅ are calculated before playback normalization."
+        )
+    elif psychoacoustic_error:
+        st.info(psychoacoustic_error)
+    else:
+        st.caption(
+            "Create a listening comparison to calculate sharpness and tonality for each version."
+        )
+
     sharpness_col, tonality_col = st.columns(2, gap="large")
     with sharpness_col:
         st.markdown(
             """
-            **Sharpness — listen for brightness or hiss.**
+            **Sharpness: listen for brightness or hiss.**
 
-            Sharpness describes the perceived balance of the spectrum, giving more weight to
-            high-frequency loudness. A version that retains relatively more upper-frequency content
-            may sound brighter or sharper; one that suppresses it may sound softer or duller.
+            Higher S₅ can mean more brightness or hiss. DIN 45692 calculates it from
+            time-varying ISO 532-1 specific loudness.
             """
         )
     with tonality_col:
         st.markdown(
             """
-            **Tonality — listen for a hum, whine, or narrow pitch standing out.**
+            **Tonality: listen for a hum, whine, or distinct pitch.**
 
-            Tonality concerns how audible a tonal component is relative to the surrounding noise.
-            Attenuating an existing tone can make it less prominent, while reducing nearby frequencies
-            more strongly can make a remaining tone stand out.
+            Higher K₅ means a tone stands out more strongly from the surrounding sound.
+            Values use the Aures tonality model.
             """
         )
-    st.caption(
-        "These are listening cues, not calculated psychoacoustic scores. The demo does not compute "
-        "standardized sharpness or tonality, and the impression depends on the recording, playback "
-        "level, headphones, and listener."
-    )
 
     with st.expander("Model assumptions and technical details", expanded=False):
         width_m, height_m = PAPER_WINDOW_SIZES_M[DEMO_WINDOW_NAME]
         st.markdown(
             f"""
             - **Panel size:** A4 ({width_m * 1000:.0f} × {height_m * 1000:.0f} mm)
-            - **Host panel:** {FIXED_THICKNESS_M * 1000:.1f} mm aluminium-like plate
+            - **Host panel:** {FIXED_THICKNESS_M * 1000:.1f} mm aluminium plate
             - **Resonator mass ratio:** {FIXED_MASS_RATIO * 100:.0f}%
             - **Resonator loss factor:** {FIXED_RESONATOR_LOSS_FACTOR:.2f}
             - **Incidence model:** diffuse-field average
-            - **Bare curve:** finite A4 host panel with no local resonators
+            - **Bare listening track:** finite A4 host panel with no local resonators
             - **Analytical curves:** infinite-panel reference plus a finite A4 correction
-            - **FEM curve:** cached SOL 108 finite-element result for the selected tuning
+            - **FEM curve:** cached Siemens Simcenter 3D SOL 108 finite-element result for the selected tuning
+            - **Psychoacoustic convention:** free-field model, treating 1.0 full scale as 1 Pa (94 dB SPL)
 
             Every processed listening version applies its modeled transmission response to the same source recording.
-            They are simulations and have not been level-calibrated to a particular loudspeaker, room, or listener.
+            Uploaded recordings are not calibrated measurements. Perception still depends on playback level,
+            headphones, and listener.
             """
         )
         if cache_error:
@@ -2005,7 +2233,7 @@ def render_project_info_section() -> None:
         logo_uri = resource_data_uri(str(logo["relative_path"]))
         image_markup = f'<img src="{logo_uri}" alt="{label} logo">' if logo_uri else ""
         partner_markup.append(
-            f'<div class="mv-partner">{image_markup}<span>{label}</span></div>'
+            f'<div class="mv-partner">{image_markup}</div>'
         )
     st.markdown(
         '<div class="mv-partner-strip" aria-label="Project partners">'
@@ -2022,8 +2250,8 @@ def render_project_info_section() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="Hear how a metamaterial panel changes sound | METAVISION",
-        page_icon="🔊",
+        page_title="Hear a metamaterial panel change sound | METAVISION",
+        page_icon=PROJECT_ROOT / "archive/metavision.png",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
@@ -2074,7 +2302,6 @@ def main() -> None:
     render_evidence_section(
         infinite,
         finite_results,
-        bare_results,
         float(values["resonance_hz"]),
         fem_overlay_curves,
         cache_error,

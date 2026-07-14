@@ -18,10 +18,10 @@ def test_general_audience_defaults_and_primary_cta() -> None:
     source = app.selectbox(key="audio_source")
     assert source.value.startswith("Aircraft cabin")
     assert source.options[:4] == [
-        "Aircraft cabin — works well at 420 Hz",
-        "Hair dryer — works well at 850 Hz",
-        "Idling motorbike — works well at 680 Hz",
-        "Vacuum cleaner — works well at 770 Hz",
+        "Aircraft cabin (works well at 420 Hz)",
+        "Hair dryer (works well at 850 Hz)",
+        "Grinder (works well at 560 Hz)",
+        "Vacuum cleaner (works well at 770 Hz)",
     ]
     assert source.options[-1] == UPLOAD_AUDIO_LABEL
 
@@ -33,10 +33,14 @@ def test_general_audience_defaults_and_primary_cta() -> None:
     assert cta.disabled is False
 
     visible_copy = " ".join(element.value for element in app.markdown)
-    assert "Hear how a metamaterial panel changes sound" in visible_copy
-    assert "Create your listening comparison" in visible_copy
-    assert "Sharpness — listen for brightness or hiss" in visible_copy
-    assert "Tonality — listen for a hum, whine, or narrow pitch standing out" in visible_copy
+    assert "Hear a Metamaterial Panel Change Sound" in visible_copy
+    assert "Create a sound comparison" in visible_copy
+    assert "Sharpness: listen for brightness or hiss" in visible_copy
+    assert "Tonality: listen for a hum, whine, or distinct pitch" in visible_copy
+    assert "Bare A4 prediction at the target" not in visible_copy
+    assert "Bare curve" not in visible_copy
+    assert "—" not in visible_copy
+    assert not any("—" in option for option in source.options)
 
 
 def test_malformed_uploaded_wav_shows_friendly_error_without_app_exception() -> None:

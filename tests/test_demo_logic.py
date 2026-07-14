@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -20,12 +21,18 @@ from secondment.fem_analytical_filter_window_app import (
     build_diagnostic_signals,
     build_level_deltas,
     build_listening_summary,
+    build_model_snapshot_html,
+    build_plot,
+    build_psychoacoustic_figure,
+    build_psychoacoustic_table,
+    build_psychoacoustic_takeaway,
     compute_curves,
     describe_level_delta,
     interpolate_stl_at_frequency,
     load_requested_audio,
     preferred_resonance_frequency,
 )
+from secondment.psychoacoustic_metrics import TrackPsychoacoustics
 
 
 class UploadedBytes:
@@ -70,9 +77,9 @@ def test_level_deltas_and_plain_language_summary() -> None:
     assert describe_level_delta(deltas[analytical]) == "6.0 dB quieter overall than the original"
 
     summary = build_listening_summary(deltas)
-    assert "bare A4 panel" in summary
+    assert "bare panel" in summary
     assert "2.5 dB quieter" in summary
-    assert "A4 analytical version" in summary
+    assert "analytical version" in summary
     assert "6.0 dB quieter" in summary
     assert "FEM version" in summary
     assert "12.0 dB quieter" in summary
@@ -116,6 +123,68 @@ def test_compute_curves_returns_distinct_bare_a4_baseline() -> None:
         resonant["A4"].stl_db[target_index],
         bare["A4"].stl_db[target_index],
     )
+
+
+def test_evidence_plot_omits_bare_panel_curve() -> None:
+    infinite = SimpleNamespace(
+        freqs_hz=np.array([100.0, 420.0, 1_000.0]),
+        stl_db=np.array([10.0, 20.0, 30.0]),
+    )
+    resonant = {
+        "A4": SimpleNamespace(
+            freqs_hz=np.array([100.0, 420.0, 1_000.0]),
+            stl_db=np.array([12.0, 35.0, 32.0]),
+        )
+    }
+
+    figure = build_plot(infinite, resonant, 420.0)
+    trace_names = [str(trace.name) for trace in figure.data]
+
+    assert any("A4 metamaterial" in name for name in trace_names)
+    assert any("infinite" in name.lower() for name in trace_names)
+    assert not any("bare" in name.lower() for name in trace_names)
+
+
+def test_psychoacoustic_comparison_preserves_order_and_separate_scales() -> None:
+    metrics = {
+        label: TrackPsychoacoustics(
+            sharpness_s5_acum=1.0 + index / 10.0,
+            tonality_k5_tu=0.2 + index / 10.0,
+        )
+        for index, label in enumerate(PRIMARY_AUDIO_LABELS)
+    }
+
+    table = build_psychoacoustic_table(metrics)
+
+    assert table["Listening version"].tolist() == list(PRIMARY_AUDIO_LABELS)
+    assert table["Sharpness S₅ (acum)"].tolist() == pytest.approx(
+        [1.0, 1.1, 1.2, 1.3]
+    )
+    assert table["Tonality K₅ (t.u.)"].tolist() == pytest.approx(
+        [0.2, 0.3, 0.4, 0.5]
+    )
+
+    figure = build_psychoacoustic_figure(metrics)
+    assert len(figure.data) == 2
+    assert all(trace.type == "bar" and trace.orientation == "h" for trace in figure.data)
+    assert list(figure.data[0].x) == pytest.approx([1.3, 1.2, 1.1, 1.0])
+    assert list(figure.data[1].x) == pytest.approx([0.5, 0.4, 0.3, 0.2])
+    assert figure.layout.xaxis.range != figure.layout.xaxis2.range
+
+    takeaway = build_psychoacoustic_takeaway(metrics)
+    assert f"Highest sharpness: **{PRIMARY_AUDIO_LABELS[-1]}**" in takeaway
+    assert f"Highest tonality: **{PRIMARY_AUDIO_LABELS[-1]}**" in takeaway
+
+
+def test_model_snapshot_is_compact_and_omits_bare_prediction() -> None:
+    snapshot = build_model_snapshot_html(420.0, 37.8, 42.0, 28.5)
+
+    assert snapshot.count('class="mv-model-fact"') == 4
+    assert "Target frequency" in snapshot
+    assert "Metamaterial, analytical" in snapshot
+    assert "Metamaterial, FEM" in snapshot
+    assert "Infinite panel" in snapshot
+    assert "Bare" not in snapshot
 
 
 @pytest.mark.parametrize(
