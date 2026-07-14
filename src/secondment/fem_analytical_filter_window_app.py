@@ -2250,7 +2250,7 @@ def render_project_info_section() -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="Hear a metamaterial panel change sound | METAVISION",
+        page_title="Hear How a metamaterial panel change sound | METAVISION",
         page_icon=PROJECT_ROOT / "archive/metavision.png",
         layout="wide",
         initial_sidebar_state="collapsed",
