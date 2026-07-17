@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import mimetypes
 import re
 import sys
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +56,7 @@ from secondment.fem_prerun.config import load_config as load_fem_prerun_config
 from secondment.fem_prerun.lookup import SOLVER_ID as FEM_SOLVER_ID
 from secondment.fem_prerun.lookup import fem_lookup_signature
 from secondment.fem_prerun.store_adapter import find_matching_fem_entry
+from secondment.feedback_store import FeedbackSubmissionError, submit_listening_feedback
 
 
 WINDOW_COLORS = {
@@ -182,6 +185,14 @@ PSYCHOACOUSTIC_DISPLAY_LABELS = {
     ANALYTICAL_PANEL_AUDIO_LABEL: "Metamaterial<br>(analytical)",
     FEM_PANEL_AUDIO_LABEL: "Metamaterial<br>(FEM)",
 }
+LISTENING_FEEDBACK_OPTIONS = {
+    "Yes, clearly": "clearly",
+    "Yes, slightly": "slightly",
+    "Not sure": "unsure",
+    "No": "no",
+}
+FEEDBACK_VERSION = 1
+FEEDBACK_APP_VERSION = "listening-demo-feedback-v1"
 
 
 def read_fem_stl_csv(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -1274,18 +1285,18 @@ def render_demo_styles() -> None:
             line-height: 1.65;
             margin: 0 0 1.25rem;
         }
-        .mv-result-lede {
+        .mv-perception-summary {
             border-left: 4px solid var(--mv-analytical);
             padding: 0.25rem 0 0.25rem 1.15rem;
-            margin: 2.75rem 0 1.5rem;
+            margin: 1rem 0 1.5rem;
         }
-        .mv-result-lede strong {
+        .mv-perception-summary strong {
             color: var(--mv-ink);
             display: block;
             font-size: 1.05rem;
             margin-bottom: 0.25rem;
         }
-        .mv-result-lede p {
+        .mv-perception-summary p {
             color: var(--mv-muted);
             font-size: 1.02rem;
             line-height: 1.6;
@@ -1386,9 +1397,6 @@ def render_demo_styles() -> None:
                 font-size: 1rem;
                 line-height: 1.55;
             }
-            .mv-result-lede {
-                margin-top: 2rem;
-            }
             .mv-model-facts {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
@@ -1475,6 +1483,145 @@ def build_audio_source_signature(
         getattr(uploaded_file, "size", None),
         round(float(duration_seconds), 3),
     )
+
+
+def get_feedback_settings() -> tuple[str, str] | None:
+    """Return configured Supabase settings without making feedback mandatory."""
+
+    try:
+        settings = st.secrets["feedback"]
+        supabase_url = str(settings["supabase_url"]).strip()
+        publishable_key = str(settings["supabase_publishable_key"]).strip()
+    except Exception:
+        return None
+    if not supabase_url or not publishable_key:
+        return None
+    return supabase_url, publishable_key
+
+
+def get_feedback_session_id() -> str:
+    """Return a random, browser-session identifier with no personal information."""
+
+    session_id = st.session_state.get("listening_feedback_session_id")
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+        st.session_state["listening_feedback_session_id"] = session_id
+    return str(session_id)
+
+
+def build_feedback_comparison_signature(
+    filter_signature: tuple,
+    source_type: str,
+    duration_seconds: float,
+    methods: tuple[str, ...],
+) -> str:
+    """Build a stable comparison ID without retaining upload names or audio data."""
+
+    public_context = (
+        filter_signature,
+        str(source_type),
+        round(float(duration_seconds), 3),
+        tuple(methods),
+    )
+    return hashlib.sha256(repr(public_context).encode("utf-8")).hexdigest()
+
+
+def build_listening_feedback_payload(
+    *,
+    session_id: str,
+    response: str,
+    comment: str,
+    source_type: str,
+    resonance_hz: float,
+    methods: tuple[str, ...],
+    comparison_signature: str,
+) -> dict[str, object]:
+    """Build the constrained row sent to Supabase."""
+
+    normalized_comment = str(comment).strip()
+    return {
+        "session_id": str(session_id),
+        "response": str(response),
+        "comment": normalized_comment or None,
+        "source_type": str(source_type),
+        "resonance_hz": float(resonance_hz),
+        "methods": list(methods),
+        "comparison_signature": str(comparison_signature),
+        "app_version": FEEDBACK_APP_VERSION,
+        "feedback_version": FEEDBACK_VERSION,
+    }
+
+
+def render_listening_feedback(
+    *,
+    filter_signature: tuple,
+    audio_request: dict[str, object],
+    resonance_hz: float,
+    methods: tuple[str, ...],
+) -> None:
+    """Render and persist one optional perception response per comparison."""
+
+    feedback_settings = get_feedback_settings()
+    if feedback_settings is None:
+        return
+
+    source_type = str(audio_request["source_type"])
+    duration_seconds = float(audio_request["duration_seconds"])
+    comparison_signature = build_feedback_comparison_signature(
+        filter_signature,
+        source_type,
+        duration_seconds,
+        methods,
+    )
+    submitted_comparisons = st.session_state.get("listening_feedback_submitted", {})
+    if submitted_comparisons.get(comparison_signature):
+        st.success("Thank you—your response was recorded.")
+        return
+
+    with st.container(border=True, key="listening_feedback_panel"):
+        st.markdown("#### What did you hear?")
+        with st.form(f"listening_feedback_form_{comparison_signature[:12]}"):
+            selected_label = st.radio(
+                "Could you hear a difference between the versions?",
+                options=list(LISTENING_FEEDBACK_OPTIONS),
+                index=None,
+                horizontal=True,
+            )
+            comment = st.text_area(
+                "Optional comment",
+                max_chars=2000,
+                placeholder="What sounded different, or what was difficult to compare?",
+            )
+            st.caption(
+                "Please do not include names, contact details, or other personal information."
+            )
+            submitted = st.form_submit_button("Submit feedback", type="primary")
+
+        if not submitted:
+            return
+        if selected_label is None:
+            st.warning("Choose one response before submitting.")
+            return
+
+        payload = build_listening_feedback_payload(
+            session_id=get_feedback_session_id(),
+            response=LISTENING_FEEDBACK_OPTIONS[selected_label],
+            comment=comment,
+            source_type=source_type,
+            resonance_hz=resonance_hz,
+            methods=methods,
+            comparison_signature=comparison_signature,
+        )
+        try:
+            submit_listening_feedback(*feedback_settings, payload)
+        except FeedbackSubmissionError:
+            st.warning("We could not save your feedback just now. Please try again.")
+            return
+
+        updated_submissions = dict(submitted_comparisons)
+        updated_submissions[comparison_signature] = True
+        st.session_state["listening_feedback_submitted"] = updated_submissions
+        st.success("Thank you—your response was recorded.")
 
 
 def render_demo_controls(
@@ -1581,6 +1728,7 @@ def render_auralization(
     bare_results: dict[str, object],
     filter_signature: tuple,
     audio_request: dict[str, object],
+    resonance_hz: float,
     fem_lrm_curves: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> None:
     fem_lrm_curves = fem_lrm_curves or {}
@@ -1666,16 +1814,6 @@ def render_auralization(
 
     signals = result_state["primary_signals"]
     level_deltas = result_state["level_deltas"]
-    summary = build_listening_summary(level_deltas)
-    st.markdown(
-        f"""
-        <div class="mv-result-lede" role="status">
-            <strong>What changed in this simulation</strong>
-            <p>{summary}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     sample_rate = int(result_state["sample_rate"])
     descriptions = {
         ORIGINAL_AUDIO_LABEL: "The unprocessed recording used as the listening reference.",
@@ -1697,6 +1835,12 @@ def render_auralization(
     st.caption(
         "The player keeps the same time position when you switch versions. Level differences are "
         "relative computer predictions, not calibrated sound-pressure measurements."
+    )
+    render_listening_feedback(
+        filter_signature=filter_signature,
+        audio_request=audio_request,
+        resonance_hz=resonance_hz,
+        methods=tuple(signals),
     )
 
     with st.expander("Additional model detail", expanded=False):
@@ -1829,7 +1973,6 @@ def build_listening_summary(level_deltas: dict[str, float]) -> str:
         )
     else:
         statements.append("A matching Finite Element Model (FEM) result is not available for this target frequency.")
-    statements.append("Switch versions while playback continues to compare the same moment.")
     return " ".join(statements)
 
 
@@ -2122,8 +2265,19 @@ def render_evidence_section(
 
     st.subheader("What your ears may notice")
     result_state = st.session_state.get("window_auralization") or {}
+    level_deltas = result_state.get("level_deltas") or {}
     psychoacoustic_metrics = result_state.get("psychoacoustic_metrics") or {}
     psychoacoustic_error = result_state.get("psychoacoustic_error")
+    if level_deltas:
+        st.markdown(
+            f"""
+            <div class="mv-perception-summary">
+                <strong>Overall modeled level</strong>
+                <p>{build_listening_summary(level_deltas)}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     if psychoacoustic_metrics:
         st.markdown(
             f"**At a glance:** {build_psychoacoustic_takeaway(psychoacoustic_metrics)}"
@@ -2209,10 +2363,13 @@ def render_project_info_section() -> None:
     with privacy_col:
         st.markdown(
             """
-            **If you upload audio**
+            **Audio and feedback privacy**
 
             The file is processed in memory for this browser session and is not intentionally saved by
             the application. Do not upload confidential or personally identifying recordings.
+
+            If you submit feedback, the response, optional comment, and listening settings are stored.
+            Uploaded audio and filenames are not included. Do not put personal information in comments.
             """
         )
 
@@ -2298,6 +2455,7 @@ def main() -> None:
             fem_overlay_curves,
         ),
         audio_request,
+        float(values["resonance_hz"]),
         fem_overlay_curves,
     )
     render_evidence_section(

@@ -25,6 +25,14 @@ The bundle includes:
 
 The larger research-archive WAV collection is intentionally omitted to keep the deployment small. The app includes curated listening examples and accepts WAV uploads up to 20 MB.
 
+## Listening feedback
+
+After creating a listening comparison, visitors can report whether they heard a difference and
+optionally leave a short comment. Copy `.streamlit/secrets.toml.example` to
+`.streamlit/secrets.toml` for local use, or add the same `[feedback]` settings to the deployed
+app's Streamlit secrets. The Supabase `listening_feedback` table must grant the public role INSERT
+access only; it must not grant SELECT, UPDATE, or DELETE access.
+
 ## Test
 
 ```bash
@@ -32,9 +40,13 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
-## Upload privacy
+## Data and feedback privacy
 
 Uploaded audio is processed transiently for the active Streamlit session and this application does not intentionally save it to persistent storage. Do not upload sensitive or personally identifying recordings to a public deployment; the hosting provider's processing and privacy terms still apply.
+
+Submitted feedback stores the selected response, optional comment, anonymous session identifier,
+sound-example label, target frequency, and compared-method labels. It does not store uploaded audio
+or upload filenames. Visitors are asked not to put personal information in comments.
 
 ## Embed on the METAVISION site
 

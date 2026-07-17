@@ -20,7 +20,9 @@ from secondment.fem_analytical_filter_window_app import (
     build_audio_card_figure,
     build_demo_values,
     build_diagnostic_signals,
+    build_feedback_comparison_signature,
     build_level_deltas,
+    build_listening_feedback_payload,
     build_listening_summary,
     build_model_snapshot_html,
     build_plot,
@@ -59,6 +61,32 @@ def test_default_resonance_prefers_exact_420_hz() -> None:
     assert preferred_resonance_frequency([]) == DEFAULT_RESONANCE_HZ == 420.0
 
 
+def test_feedback_payload_contains_context_but_no_audio_data() -> None:
+    signature = build_feedback_comparison_signature(
+        ("filter", 420.0),
+        UPLOAD_AUDIO_LABEL,
+        8.0,
+        tuple(PRIMARY_AUDIO_LABELS),
+    )
+    payload = build_listening_feedback_payload(
+        session_id="f39011dc-e443-4f38-9548-528c18efb4d3",
+        response="slightly",
+        comment="  The FEM version sounded quieter.  ",
+        source_type=UPLOAD_AUDIO_LABEL,
+        resonance_hz=420.0,
+        methods=tuple(PRIMARY_AUDIO_LABELS),
+        comparison_signature=signature,
+    )
+
+    assert len(signature) == 64
+    assert payload["response"] == "slightly"
+    assert payload["comment"] == "The FEM version sounded quieter."
+    assert payload["source_type"] == UPLOAD_AUDIO_LABEL
+    assert payload["methods"] == list(PRIMARY_AUDIO_LABELS)
+    assert "audio" not in payload
+    assert "filename" not in payload
+
+
 def test_level_deltas_and_plain_language_summary() -> None:
     original, bare, analytical, fem = PRIMARY_AUDIO_LABELS
     signals = {
@@ -84,7 +112,7 @@ def test_level_deltas_and_plain_language_summary() -> None:
     assert "6.0 dB quieter" in summary
     assert "Finite Element Model (FEM) version" in summary
     assert "12.0 dB quieter" in summary
-    assert "playback continues" in summary
+    assert "playback continues" not in summary
 
 
 def test_summary_explains_when_fem_result_is_missing() -> None:
